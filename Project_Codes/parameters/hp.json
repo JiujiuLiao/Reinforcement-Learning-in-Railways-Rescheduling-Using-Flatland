@@ -1,0 +1,102 @@
+{
+    "dqn_default": {
+        "memory_size": {
+            "type": "discrete",
+            "values": [50000, 100000]
+        },
+        "batch_size": {
+            "type": "discrete",
+            "values": [32, 64]
+        },
+        "learning_rate": {
+            "type": "discrete",
+            "values": [0.0005, 0.0003]
+        },
+        "update_every": {
+            "type": "discrete",
+            "values": [2, 4]
+        },
+        "gamma": {
+            "type": "discrete",
+            "values": [0.95, 0.99]
+        },
+        "hidden_sizes": {
+            "type": "discrete",
+            "values": [
+                [128, 128],
+                [256, 256],
+                [256, 128]
+            ]
+        },
+        "exp_start": {
+            "type": "discrete",
+            "values": [1.0]
+        },
+        "exp_end": {
+            "type": "discrete",
+            "values": [0.05]
+        },
+        "exp_decay": {
+            "type": "interval_real",
+            "min": 0.995,
+            "max": 0.999,
+            "n": 3
+        },
+        "tau": {
+            "type": "discrete",
+            "values": [0.005, 0.01]
+        },
+        "target_update": {
+            "type": "discrete",
+            "values": [500, 1000]
+        },
+        "soft_update": {
+            "type": "discrete",
+            "values": [true, false]
+        },
+        "noisy_net": {
+            "type": "discrete",
+            "values": [false]
+        }
+    },
+
+    "ppo_default": {
+        "memory_size": {
+            "type": "discrete",
+            "values": [4096]
+        },
+        "batch_size": {
+            "type": "discrete",
+            "values": [256, 512]
+        },
+        "learning_rate": {
+            "type": "discrete",
+            "values": [0.0003, 0.0001]
+        },
+        "gamma": {
+            "type": "discrete",
+            "values": [0.99]
+        },
+        "hidden_sizes": {
+            "type": "discrete",
+            "values": [
+                [64, 64],
+                [128, 128]
+            ]
+        },
+        "surrogate_eps_clip": {
+            "type": "discrete",
+            "values": [0.2, 0.1]
+        },
+        "loss_weight": {
+            "type": "discrete",
+            "values": [0.5]
+        },
+        "entropy_weight": {
+            "type": "interval_real",
+            "min": 0.005,
+            "max": 0.02,
+            "n": 3
+        }
+    }
+}

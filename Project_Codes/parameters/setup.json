@@ -1,0 +1,92 @@
+{
+    "sys": {
+        "seed": 42,
+        "base_dir": "",
+        "obs_class": "TreeObs",
+        "agent_class": "DQNAgent",
+        "log_class": "WandBLogger",
+        "memory_class": "ReplayBuffer",
+        "predictor_class": null
+    },
+    "obs": {
+        "tree_depth": 2,
+        "radius": 10
+    },
+    "trn": {
+        "memory_size": 100000,
+        "batch_size": 64,
+        "update_every": 4,
+        "learning_rate": 0.0005,
+        "tau": 0.005,
+        "gamma": 0.99,
+        "buffer_min_size": 5000,
+        "hidden_sizes": [
+            256,
+            256
+        ],
+        "exp_start": 1.0,
+        "exp_end": 0.05,
+        "exp_decay": 0.995,
+        "checkpoint_freq": 100,
+        "target_update": 1000,
+        "soft_update": true,
+        "noisy_net": false,
+        "surrogate_eps_clip": 0.2,
+        "loss_weight": 0.5,
+        "entropy_weight": 0.01,
+        "env": "phase1_light_malfunction"
+    },
+    "log": {
+        "log_dir": "tmp/logs",
+        "hp_dir": "hparam_tuning",
+        "attributes": {
+            "completions": [
+                "avg"
+            ],
+            "scores": [
+                "avg"
+            ],
+            "steps": [
+                "avg"
+            ],
+            "avg_delay": [
+                "avg"
+            ],
+            "loss": [
+                "avg"
+            ],
+            "deadlocks": [
+                "avg"
+            ],
+            "exploration_prob": [
+                "val"
+            ],
+            "min_steps": [],
+            "exploration_count": [
+                "val"
+            ],
+            "act_0": [
+                "avg"
+            ],
+            "act_1": [
+                "avg"
+            ],
+            "act_2": [
+                "avg"
+            ],
+            "act_3": [
+                "avg"
+            ],
+            "act_4": [
+                "avg"
+            ],
+            "time_act": [
+                "avg"
+            ],
+            "time_train": [
+                "avg"
+            ]
+        },
+        "hp_params_filename": "parameters/hp.json"
+    }
+}
