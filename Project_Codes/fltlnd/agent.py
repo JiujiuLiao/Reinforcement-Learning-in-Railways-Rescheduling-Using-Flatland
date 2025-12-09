@@ -157,6 +157,7 @@ class RandomAgent(Agent):
         self.stats = {"eps_val": 1.0, "eps_counter": 0, "loss": 0.0}
         self._memory_size = self._params["memory_size"]
         self._batch_size = self._params["batch_size"]
+        self._buffer_min_size = self._params["buffer_min_size"]  # ← FIX THIS, this is new added
 
     def __str__(self):
         return "random-agent"
@@ -217,8 +218,6 @@ class FIFOAgent(Agent):
 # ------------------------------
 #  NN base agent
 # ------------------------------
-
-
 class NNAgent(Agent):
     def init_params(self):
         self._memory_size = self._params["memory_size"]
@@ -389,7 +388,6 @@ class DQNAgent(NNAgent):
 
     def __str__(self):
         return "dqn-agent"
-
 
 # ------------------------------
 #  Double DQN

@@ -6,11 +6,11 @@
         },
         "batch_size": {
             "type": "discrete",
-            "values": [32, 64]
+            "values": [64]
         },
         "learning_rate": {
             "type": "discrete",
-            "values": [0.0005, 0.0003]
+            "values": [0.0001, 0.0003, 0.0005, 0.0007]
         },
         "update_every": {
             "type": "discrete",
@@ -18,7 +18,7 @@
         },
         "gamma": {
             "type": "discrete",
-            "values": [0.95, 0.99]
+            "values": [0.95, 0.97,0.99]
         },
         "hidden_sizes": {
             "type": "discrete",

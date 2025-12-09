@@ -1,13 +1,13 @@
 import subprocess, json, sys
 
 CURRICULUM = [
-    ("phase0_easy",   100),
-    ("phase1_light_malfunction", 150),
-    ("phase2_medium", 200),
-    ("phase3_hard",   300),
+    ("phase0_easy", 1000),
+    #("phase1_light_malfunction", 150),
+    #("phase2_medium", 200),
+    #("phase3_hard",   300),
 ]
 
-AGENTS = ["DQNAgent", "PPOAgent"]
+AGENTS = ["DQNAgent"]#, "PPOAgent"]
 
 def run(agent, env, episodes):
     print(f"\n=== Running {agent} on {env} for {episodes} episodes ===")

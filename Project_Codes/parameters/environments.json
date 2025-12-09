@@ -1,7 +1,7 @@
 {
     "phase0_easy": {
-        "n_agents": 5,
-        "x_dim": 20,
+        "n_agents": 1,
+        "x_dim": 30,
         "y_dim": 30,
         "n_cities": 2,
         "max_rails_between_cities": 2,

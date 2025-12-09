@@ -142,7 +142,7 @@ class ExcHandler:
                         shaped_reward = agent_prev_rewards[agent]
                         # Deadlock penalty
                         if info["deadlocks"][agent]:
-                            shaped_reward -= 1.0
+                            shaped_reward -= 10.0
                         # Delay penalty
                         delay_fraction = 1 - (count_steps / self._max_steps)
                         shaped_reward -= 0.2 * delay_fraction
@@ -326,7 +326,7 @@ class EnvHandler:
 
     def print_results(self, episode_idx, scores_window, completion_window, action_probs, end):
         print(
-            '\rTraining {} agents on {}x{}\t Episode {}\t Average Score: {:.3f}\tDones: {:.2f}%\t '
+            '\rTraining {} agents on {}x{}\t Episode {}\t Average Score: {:.3f}\tCompletion Rate: {:.2f}%\t '
             'Action Probabilities: \t {}'.format(
                 self.env.get_num_agents(),
                 self._params['x_dim'], self._params['y_dim'],

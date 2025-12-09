@@ -15,26 +15,26 @@
     "trn": {
         "memory_size": 100000,
         "batch_size": 64,
-        "update_every": 4,
-        "learning_rate": 0.0005,
-        "tau": 0.005,
+        "update_every": 8,
+        "learning_rate": 0.0001,
+        "tau": 0.05,
         "gamma": 0.99,
-        "buffer_min_size": 5000,
+        "buffer_min_size": 10000,
         "hidden_sizes": [
-            256,
-            256
+            128,
+            128
         ],
         "exp_start": 1.0,
-        "exp_end": 0.05,
-        "exp_decay": 0.995,
+        "exp_end": 0.01,
+        "exp_decay": 0.997,
         "checkpoint_freq": 100,
-        "target_update": 1000,
+        "target_update": 10000,
         "soft_update": true,
         "noisy_net": false,
-        "surrogate_eps_clip": 0.2,
+        "surrogate_eps_clip": 0.1,
         "loss_weight": 0.5,
         "entropy_weight": 0.01,
-        "env": "phase1_light_malfunction"
+        "env": "phase0_easy"
     },
     "log": {
         "log_dir": "tmp/logs",
