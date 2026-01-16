@@ -118,7 +118,8 @@ def plot_metric_by_env(df, metric_base_name, env_name, ylabel=None):
     for algo, grp in subset.groupby("algo"):
         grp_sorted = grp.sort_values("idx")
         plt.plot(grp_sorted["idx"], grp_sorted[col_avg], label=algo)
-
+        
+        
     plt.xlabel("Episode")
     plt.ylabel(ylabel if ylabel else metric_base_name)
     plt.title(f"{metric_base_name} vs Episodes  ({env_name})")

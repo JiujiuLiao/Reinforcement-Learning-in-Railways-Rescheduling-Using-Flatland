@@ -1,15 +1,14 @@
 import math
 from flatland.envs.rail_trainrun_data_structures import Waypoint
-
 import numpy as np
-
 from flatland.core.env_prediction_builder import PredictionBuilder
 from flatland.envs.agent_utils import RailAgentStatus
 from flatland.envs.distance_map import DistanceMap
 from flatland.envs.rail_env import RailEnvActions
 from flatland.envs.rail_env_shortest_paths import get_valid_move_actions_
 from flatland.utils.ordered_set import OrderedSet
-
+from flatland.envs.observations import TreeObsForRailEnv
+from flatland.core.grid.grid_utils import coordinate_to_position
 
 class StochasticPathPredictor(PredictionBuilder):
 
@@ -65,12 +64,35 @@ class StochasticPathPredictor(PredictionBuilder):
                     continue
 
                 d = np.array(agent_distances)
-                if d.size > 1:
-                    s = d.sum()
-                    probs = (s - d) / ((d.size - 1) * s)
-                    a = np.random.choice(np.arange(0, probs.size), p=probs)
-                else:
+                if d.size == 0:
+                    # No paths left - stay at current position
+                    prediction[index] = [index, *new_position, new_direction, RailEnvActions.STOP_MOVING]
+                    visited.add((*new_position, new_direction))
+                    continue
+                
+                if d.size == 1:
+                    # Only one path - take it deterministically
                     a = 0
+                else:
+                    s = d.sum()
+                    
+                    # Check for zero sum (already at target or invalid distances)
+                    if s == 0 or s == np.inf:
+                        # Use uniform distribution
+                        a = 0
+                    else:
+                        # Original stochastic selection
+                        probs = (s - d) / ((d.size - 1) * s)
+                        
+                        # Safety check for NaN/Inf
+                        if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
+                            # Fallback to uniform
+                            probs = np.ones(d.size) / d.size
+                        else:
+                            # Normalize to ensure sum = 1.0
+                            probs = probs / probs.sum()
+                        
+                        a = np.random.choice(np.arange(0, probs.size), p=probs)
 
                 if index % times_per_cell == 0:
                     try:
@@ -80,6 +102,7 @@ class StochasticPathPredictor(PredictionBuilder):
                         xxx = 1
 
                     agent_paths = agent_paths[1:]
+                    agent_distances = agent_distances[1:] 
 
                 # prediction is ready
                 prediction[index] = [index, *new_position, new_direction, 0]
@@ -147,3 +170,4 @@ class StochasticPathPredictor(PredictionBuilder):
                 _shortest_path_for_agent(agent)
 
         return paths, paths_distance
+    

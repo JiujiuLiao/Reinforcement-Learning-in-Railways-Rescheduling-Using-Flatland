@@ -1,57 +1,85 @@
 {
-    "phase0_easy": {
+    "phase0_single": {
         "n_agents": 1,
-        "x_dim": 30,
-        "y_dim": 30,
+        "x_dim": 25,
+        "y_dim": 25,
         "n_cities": 2,
         "max_rails_between_cities": 2,
         "max_rails_in_city": 2,
         "grid_mode": true,
         "malfunction_rate": 0.0,
         "malfunction_duration": [0, 0],
-        "speed_profiles": [1.0, 0.5],
+        "speed_profiles": [1.0],
         "curriculum_level": 0
     },
-
-    "phase1_light_malfunction": {
-        "n_agents": 10,
-        "x_dim": 20,
-        "y_dim": 30,
+    
+    "phase1_two_agents": {
+        "n_agents": 2,
+        "x_dim": 25,
+        "y_dim": 25,
         "n_cities": 2,
         "max_rails_between_cities": 2,
         "max_rails_in_city": 2,
         "grid_mode": true,
-        "malfunction_rate": 0.01,
-        "malfunction_duration": [5, 20],
-        "speed_profiles": [1.0, 0.5],
+        "malfunction_rate": 0.0,
+        "malfunction_duration": [0, 0],
+        "speed_profiles": [1.0],
         "curriculum_level": 1
     },
 
-    "phase2_medium": {
-        "n_agents": 20,
+    "phase2_three_agents": {
+        "n_agents": 3,
         "x_dim": 30,
-        "y_dim": 40,
-        "n_cities": 5,
-        "max_rails_between_cities": 3,
-        "max_rails_in_city": 3,
-        "grid_mode": false,
-        "malfunction_rate": 0.02,
-        "malfunction_duration": [10, 30],
-        "speed_profiles": [1.0, 0.5],
+        "y_dim": 30,
+        "n_cities": 3,
+        "max_rails_between_cities": 2,
+        "max_rails_in_city": 2,
+        "grid_mode": true,
+        "malfunction_rate": 0.0,
+        "malfunction_duration": [0, 0],
+        "speed_profiles": [1.0],
         "curriculum_level": 2
     },
 
-    "phase3_hard": {
-        "n_agents": 20,
-        "x_dim": 40,
-        "y_dim": 60,
-        "n_cities": 8,
-        "max_rails_between_cities": 4,
-        "max_rails_in_city": 4,
-        "grid_mode": false,
-        "malfunction_rate": 0.05,
-        "malfunction_duration": [20, 50],
-        "speed_profiles": [1.0, 0.5],
+    "phase3_five_agents": {
+        "n_agents": 5,
+        "x_dim": 30,
+        "y_dim": 30,
+        "n_cities": 3,
+        "max_rails_between_cities": 2,
+        "max_rails_in_city": 3,
+        "grid_mode": true,
+        "malfunction_rate": 0.0,
+        "malfunction_duration": [0, 0],
+        "speed_profiles": [1.0],
         "curriculum_level": 3
+    },
+
+    "phase4_five_malfunction": {
+        "n_agents": 5,
+        "x_dim": 30,
+        "y_dim": 30,
+        "n_cities": 3,
+        "max_rails_between_cities": 2,
+        "max_rails_in_city": 3,
+        "grid_mode": true,
+        "malfunction_rate": 0.005,
+        "malfunction_duration": [5, 15],
+        "speed_profiles": [1.0, 0.5],
+        "curriculum_level": 4
+    },
+
+    "phase5_ten_agents": {
+        "n_agents": 10,
+        "x_dim": 35,
+        "y_dim": 35,
+        "n_cities": 4,
+        "max_rails_between_cities": 4,
+        "max_rails_in_city": 3,
+        "grid_mode": false,
+        "malfunction_rate": 0.01,
+        "malfunction_duration": [10, 20],
+        "speed_profiles": [1.0, 0.5],
+        "curriculum_level": 5
     }
 }

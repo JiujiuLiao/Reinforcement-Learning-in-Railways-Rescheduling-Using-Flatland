@@ -6,35 +6,33 @@
         "agent_class": "DQNAgent",
         "log_class": "WandBLogger",
         "memory_class": "ReplayBuffer",
-        "predictor_class": null
+        "predictor_class": "StochasticPathPredictor"
     },
     "obs": {
-        "tree_depth": 2,
+        "tree_depth": 3,
+        "predictor_depth": 30,
         "radius": 10
     },
     "trn": {
         "memory_size": 100000,
         "batch_size": 64,
         "update_every": 8,
-        "learning_rate": 0.0001,
-        "tau": 0.05,
-        "gamma": 0.99,
+        "learning_rate": 0.0005,
+        "tau": 0.001,
+        "gamma": 0.95,
         "buffer_min_size": 10000,
         "hidden_sizes": [
-            128,
-            128
+            256,
+            256
         ],
         "exp_start": 1.0,
         "exp_end": 0.01,
         "exp_decay": 0.997,
         "checkpoint_freq": 100,
-        "target_update": 10000,
+        "target_update": 2000,
         "soft_update": true,
         "noisy_net": false,
-        "surrogate_eps_clip": 0.1,
-        "loss_weight": 0.5,
-        "entropy_weight": 0.01,
-        "env": "phase0_easy"
+        "env": "phase5_ten_agents"
     },
     "log": {
         "log_dir": "tmp/logs",
@@ -61,7 +59,6 @@
             "exploration_prob": [
                 "val"
             ],
-            "min_steps": [],
             "exploration_count": [
                 "val"
             ],

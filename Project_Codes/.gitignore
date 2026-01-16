@@ -1,0 +1,7 @@
+# Plots directory
+plots/
+
+# Also consider ignoring other generated files
+tmp/
+*.pyc
+__pycache__/

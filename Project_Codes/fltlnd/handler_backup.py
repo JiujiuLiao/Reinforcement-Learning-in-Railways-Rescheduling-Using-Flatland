@@ -101,13 +101,6 @@ class ExcHandler:
 
                 # Reset environment
                 obs, info = self._env_handler.reset()
-                
-                # Reset per-episode tracking for reward shaping
-                self._prev_distances = {}
-                self._agent_deadlock_steps = {}  # Track how long each agent has been in deadlock
-                
-                # Get number of agents for reward normalization
-                num_agents = self._env_handler.get_num_agents()
 
                 # Build agent-specific observations
                 for agent in self._env_handler.get_agents_handle():
@@ -138,100 +131,129 @@ class ExcHandler:
                     act_time = time.time() - act_time
 
                     # Environment step
+
                     next_obs, all_rewards, done, info = self._env_handler.step(action_dict)
 
-                    # ============================================================
-                    # FIXED REWARD SHAPING - Properly scaled for multi-agent
-                    # ============================================================
+                    # # Update replay buffer and train agent
+                    # train_time = time.time()
+                    # for agent in self._env_handler.get_agents_handle():
+                    #     # ---- REWARD SHAPING ----
+                    #     # Start with CURRENT step's base reward from environment
+                    #     shaped_reward = 0
+                        
+                    #     # Completion bonus (current step)
+                    #     if done[agent]:
+                    #         agent_status = self._env_handler.env.agents[agent].status
+                    #         if agent_status == 4:  # DONE_REMOVED = successfully reached target
+                    #             shaped_reward += 10.0
+                    #         else:
+                    #             shaped_reward = -0.5
+                        
+                    #     # Deadlock penalty (current step)
+                    #     if info["deadlocks"][agent]:
+                    #         shaped_reward = -10.0
+                        
+                    #     # Time penalty (encourage efficiency)
+                    #     shaped_reward -= 0.001
+                    #     # -------------------------
+                        
+                    #     # Store experience with proper temporal alignment:
+                    #     # (prev_obs, prev_action) → (shaped_reward, curr_obs, done)
+                    #     if self._training and (update_values or done[agent]):
+                    #         self._policy.step(
+                    #             agent_prev_obs[agent],      # State at t-1
+                    #             agent_prev_action[agent],   # Action at t-1
+                    #             shaped_reward,              # Reward at t (from action at t-1)
+                    #             agent_obs[agent],           # State at t
+                    #             done[agent],                # Done at t
+                    #             agent
+                    #         )
+                            
+                    #         # Update for next iteration
+                    #         agent_prev_obs[agent] = agent_obs[agent].copy()
+                    #         agent_prev_action[agent] = action_dict[agent]
+                    #         # ← No agent_prev_rewards needed!
+
+                    #     if next_obs[agent]:
+                    #         agent_obs[agent] = self._obs_wrapper.normalize(
+                    #             next_obs[agent],
+                    #             self._env_handler,
+                    #             agent
+                    #         )
+
+                    #     score += shaped_reward
+                    
+                    # Improved Reward Shaping for handler.py
+                    # Replace the reward shaping section (around line 140-160) with this:
+
+                    # Update replay buffer and train agent
                     train_time = time.time()
                     for agent in self._env_handler.get_agents_handle():
-                        shaped_reward = 0.0
+                        # ---- IMPROVED REWARD SHAPING ----
+                        shaped_reward = 0
+                        
                         agent_obj = self._env_handler.env.agents[agent]
                         
-                        # ----------------------------------------------------------
-                        # FIX 1: Use normalized, bounded rewards
-                        # All rewards are scaled to roughly [-1, +1] range
-                        # ----------------------------------------------------------
-                        
-                        # 1. Progress reward (dense signal)
-                        #    Normalized by approximate map diagonal
+                        # 1. Progress reward (dense, incremental)
                         if agent_obj.position is not None and agent_obj.target is not None:
+                            # Calculate Manhattan distance to target
                             current_dist = abs(agent_obj.position[0] - agent_obj.target[0]) + \
                                           abs(agent_obj.position[1] - agent_obj.target[1])
                             
-                            # Normalize by map size
-                            map_diagonal = self._env_handler.x_dim + self._env_handler.y_dim
+                            # Initialize previous distances dict if not exists
+                            if not hasattr(self, '_prev_distances'):
+                                self._prev_distances = {}
                             
+                            # Get previous distance (or current if first step)
                             prev_dist = self._prev_distances.get(agent, current_dist)
                             
-                            # Progress is change in distance, normalized
-                            progress = (prev_dist - current_dist) / map_diagonal
-                            shaped_reward += progress * 0.5  # Scale factor
+                            # Reward for getting closer, penalty for moving away
+                            if current_dist < prev_dist:
+                                shaped_reward += 0.1  # Moving closer to target
+                            elif current_dist > prev_dist:
+                                shaped_reward -= 0.05  # Moving away from target
                             
+                            # Update stored distance
                             self._prev_distances[agent] = current_dist
                         
-                        # 2. Completion reward (sparse but important)
-                        #    FIX: Use moderate, fixed bonus regardless of agent count
+                        # 2. Completion bonus/penalty (large magnitude)
                         if done[agent]:
-                            if agent_obj.status == RailAgentStatus.DONE:
-                                # Successful completion - moderate bonus
-                                shaped_reward += 1.0
-                                # Clear tracking
-                                if agent in self._prev_distances:
+                            if agent_obj.status == RailAgentStatus.DONE:  # Successfully reached target
+                                shaped_reward += 50.0  # Big success bonus!
+                                # Clear stored distance for this agent
+                                if hasattr(self, '_prev_distances') and agent in self._prev_distances:
                                     del self._prev_distances[agent]
-                                if agent in self._agent_deadlock_steps:
-                                    del self._agent_deadlock_steps[agent]
                             else:
-                                # Failed to reach target - small penalty
-                                shaped_reward -= 0.1
+                                shaped_reward -= 5.0  # Penalty for not reaching target
                         
-                        # 3. Deadlock handling
-                        #    FIX: Use decaying penalty, not constant large penalty
-                        #    This prevents the "just stop moving" exploit
+                        # 3. Deadlock penalty (severe)
                         if info["deadlocks"][agent]:
-                            # Track how many steps this agent has been deadlocked
-                            self._agent_deadlock_steps[agent] = self._agent_deadlock_steps.get(agent, 0) + 1
-                            deadlock_steps = self._agent_deadlock_steps[agent]
-                            
-                            # Penalty increases over time but is bounded
-                            # First few steps: small penalty (might resolve naturally)
-                            # Longer deadlock: larger penalty (but capped)
-                            if deadlock_steps <= 5:
-                                shaped_reward -= 0.05
-                            elif deadlock_steps <= 20:
-                                shaped_reward -= 0.1
-                            else:
-                                shaped_reward -= 0.2  # Cap the penalty
-                        else:
-                            # Reset deadlock counter if agent is not deadlocked
-                            self._agent_deadlock_steps[agent] = 0
+                            shaped_reward -= 20.0  # Harsh penalty for deadlock
                         
-                        # 4. Time pressure (encourage efficiency)
-                        #    FIX: Very small penalty, normalized by max steps
-                        shaped_reward -= 0.001
+                        # 4. Time penalty (encourage efficiency)
+                        shaped_reward -= 0.01  # Small penalty per timestep
                         
-                        # 5. Action-specific shaping
-                        #    FIX: Remove STOP penalty - it causes reward hacking!
-                        #    Instead, only penalize illegal actions
+                        # 5. Action penalty (discourage wasteful stopping)
+                        if action_dict[agent] == 4:  # STOP_MOVING
+                            shaped_reward -= 0.02  # Penalize unnecessary stops
+                        
+                        # 6. Illegal action penalty (if action masking not used)
                         if not info['action_required'][agent] and action_dict[agent] != 0:
-                            shaped_reward -= 0.01  # Small penalty for unnecessary action
+                            shaped_reward -= 0.1  # Small penalty for acting when not needed
+                        # -------------------------
                         
-                        # ----------------------------------------------------------
-                        # FIX 2: Clip total reward to prevent extreme values
-                        # ----------------------------------------------------------
-                        shaped_reward = np.clip(shaped_reward, -2.0, 2.0)
-                        
-                        # Store experience
+                        # Store experience with proper temporal alignment
                         if self._training and (update_values or done[agent]):
                             self._policy.step(
-                                agent_prev_obs[agent],
-                                agent_prev_action[agent],
-                                shaped_reward,
-                                agent_obs[agent],
-                                done[agent],
+                                agent_prev_obs[agent],      # State at t-1
+                                agent_prev_action[agent],   # Action at t-1
+                                shaped_reward,              # Reward at t (from action at t-1)
+                                agent_obs[agent],           # State at t
+                                done[agent],                # Done at t
                                 agent
                             )
                             
+                            # Update for next iteration
                             agent_prev_obs[agent] = agent_obs[agent].copy()
                             agent_prev_action[agent] = action_dict[agent]
 
@@ -266,6 +288,9 @@ class ExcHandler:
 
                 n_agents = max(1, self._env_handler.env.get_num_agents())
 
+                # Simple approximation: if not all tasks are completed, the delay remains high.
+                # We approximate avg_delay as (max_steps - number of steps taken), normalized over all agents.
+                # This is a simple proxy: the earlier the episode ends, the lower the delay.
                 avg_delay = (self._max_steps - count_steps) / self._max_steps
 
                 self._logger.log_episode(
@@ -338,20 +363,25 @@ class EnvHandler:
         self.max_rails_between_cities = self._params['max_rails_between_cities']
         self.max_rails_in_city = self._params['max_rails_in_city']
         self.n_agents = self._params['n_agents']
+        # Read malfunction duration (min, max) from the parameter list
         min_mal, max_mal = self._params["malfunction_duration"]
 
-        if "malfunction_rate" in self._params:
+        # Support two configuration styles:
+        # 1) New version: malfunction_rate (provided in the new environments.json)
+        # 2) Legacy version: min_malfunction_interval (for old files, if present)
+        if   "malfunction_rate" in self._params:
              malfunction_rate = self._params["malfunction_rate"]
         elif "min_malfunction_interval" in self._params and self._params["min_malfunction_interval"] > 0:
              malfunction_rate = 1.0 / self._params["min_malfunction_interval"]
         else:
-             malfunction_rate = 0.0
+             malfunction_rate = 0.0  # No malfunctions
 
         self.mal_params = mal_gen.MalfunctionParameters(
-            malfunction_rate,
-            min_mal,
-            max_mal
+        malfunction_rate,
+        min_mal,
+        max_mal
         )
+        # Check for ParamMalfunctionGen existance for retrocompatibility purposes
         try:
             self.env = RailEnv(
                 width=self.x_dim,
@@ -401,12 +431,14 @@ class EnvHandler:
                 np.mean(scores_window),
                 100 * np.mean(completion_window),
                 100 * np.mean(delay_window),
+                # self._parameters['expl']['start'] to print epsilon,
                 action_probs,
             ), end=end)
 
     def step(self, action_dict):
         next_obs, all_rewards, done, info = self.env.step(action_dict)
 
+        # Compute deadlocks
         deadlocks = self.deadlocks_detector.step(self.env)
         info["deadlocks"] = {}
         for agent in self.get_agents_handle():
