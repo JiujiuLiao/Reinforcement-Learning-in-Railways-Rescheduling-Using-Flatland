@@ -126,16 +126,38 @@ class ExcHandler:
 
                     act_time = time.time()
                     for agent in self._env_handler.get_agents_handle():
+                        agent_obj = self._env_handler.env.agents[agent]
+                        
                         if info['action_required'][agent]:
-                            # If an action is required, we want to store the obs at that step as well as the action
                             update_values = True
                             action = self._policy.act(agent_obs[agent])
                             action_count[action] += 1
                         else:
                             update_values = False
-                            action = 0
+                            # FIX: Check if agent is stopped and try to restart
+                            # RailAgentStatus.ACTIVE = 1, and if position hasn't changed, agent might be stopped
+                            if agent_obj.status == RailAgentStatus.ACTIVE:
+                                # Agent is active but no action required - either on straight track or stopped
+                                # Send FORWARD to ensure movement continues
+                                action = 2  # MOVE_FORWARD - this will restart stopped agents
+                            else:
+                                action = 0  # DO_NOTHING for non-active agents
+                        
                         action_dict.update({agent: action})
                     act_time = time.time() - act_time
+
+                    # Add diagnostic logging HERE (right after action selection, before env.step)
+                    # now it is commented out temporarily
+                    # print(f"\nStep {step}:")
+                    # for agent in self._env_handler.get_agents_handle():
+                    #     agent_obj = self._env_handler.env.agents[agent]
+                    #     print(f"  Agent {agent}: action={action_dict[agent]}, "
+                    #         f"status={agent_obj.status}, "
+                    #         f"position={agent_obj.position}, "
+                    #         f"target={agent_obj.target}, " 
+                    #         f"direction={agent_obj.direction}, "  
+                    #         f"deadlock={info['deadlocks'][agent]}, " 
+                    #         f"action_required={info['action_required'][agent]}")
 
                     # Environment step
                     next_obs, all_rewards, done, info = self._env_handler.step(action_dict)

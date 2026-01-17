@@ -1,6 +1,9 @@
 # Plots directory
 plots/
 
+# Visualizations directory (GIFs and images)
+visualizations/
+
 # Also consider ignoring other generated files
 tmp/
 *.pyc
