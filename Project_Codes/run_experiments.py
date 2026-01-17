@@ -5,7 +5,7 @@ import os
 
 CURRICULUM = [
     # Phase 0: Single agent pathfinding (baseline)
-    ("phase0_single", 500, False),      # Fresh start, learn basic navigation
+    # ("phase0_single", 500, False),      # Fresh start, learn basic navigation
     
     # Phase 1: Two agents - learn basic collision avoidance
     ("phase1_two_agents", 1000, False), # Fresh start - don't transfer single-agent policy!
@@ -17,10 +17,10 @@ CURRICULUM = [
     ("phase3_five_agents", 2000, True),  # Transfer from 3-agent policy
     
     # Phase 4: Add malfunctions
-    ("phase4_five_malfunction", 1500, True),  # Same agents, add disruptions
+    # ("phase4_five_malfunction", 2500, True),  # Same agents, add disruptions
     
     # Phase 5: Full scale
-    ("phase5_ten_agents", 3000, True),   # Transfer to 10 agents
+    # ("phase5_ten_agents", 3000, True),   # Transfer to 10 agents
 ]
 
 AGENTS = ["DQNAgent"]

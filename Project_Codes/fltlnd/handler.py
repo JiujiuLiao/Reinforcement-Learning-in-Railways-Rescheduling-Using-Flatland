@@ -132,7 +132,7 @@ class ExcHandler:
                             update_values = True
                             action = self._policy.act(agent_obs[agent])
                             action_count[action] += 1
-                        else:
+                        else: 
                             update_values = False
                             # FIX: Check if agent is stopped and try to restart
                             # RailAgentStatus.ACTIVE = 1, and if position hasn't changed, agent might be stopped

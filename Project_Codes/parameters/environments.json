@@ -77,7 +77,7 @@
         "max_rails_between_cities": 4,
         "max_rails_in_city": 3,
         "grid_mode": false,
-        "malfunction_rate": 0.01,
+        "malfunction_rate": 0.005,
         "malfunction_duration": [10, 20],
         "speed_profiles": [1.0, 0.5],
         "curriculum_level": 5

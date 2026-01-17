@@ -271,99 +271,99 @@ class PrioritizedBuffer(Buffer):
         return self._internal_len
 
 
-class AgentEpisodeBuffer(Buffer):
-    """
-    Episode buffer tailored for PPO-style algorithms.
+# class AgentEpisodeBuffer(Buffer):
+#     """
+#     Episode buffer tailored for PPO-style algorithms.
 
-    For each agent, it stores the whole episode as a sequence of:
-    [action, value, obs, reward, done, policy_logits]
-    """
+#     For each agent, it stores the whole episode as a sequence of:
+#     [action, value, obs, reward, done, policy_logits]
+#     """
 
-    def __init__(self, buffer_size, batch_size):
-        super().__init__(buffer_size, batch_size)
-        # key = agent_id, value = list of [action, value, obs, reward, done, policy_logits]
-        self._memory = {}
+#     def __init__(self, buffer_size, batch_size):
+#         super().__init__(buffer_size, batch_size)
+#         # key = agent_id, value = list of [action, value, obs, reward, done, policy_logits]
+#         self._memory = {}
 
-    # For compatibility with the base interface (not used by PPO)
-    def add(self, state, action, reward, next_state, done):
-        """
-        Unused for PPO.
+#     # For compatibility with the base interface (not used by PPO)
+#     def add(self, state, action, reward, next_state, done):
+#         """
+#         Unused for PPO.
 
-        PPO relies on add_agent_episode instead of this method.
-        """
-        return
+#         PPO relies on add_agent_episode instead of this method.
+#         """
+#         return
 
-    def sample(self):
-        """
-        Random sampling is not needed for PPO-style training.
+#     def sample(self):
+#         """
+#         Random sampling is not needed for PPO-style training.
 
-        Use retrieve_agent_episodes() instead.
-        """
-        raise NotImplementedError(
-            "AgentEpisodeBuffer is designed for PPO; "
-            "use retrieve_agent_episodes() instead of sample()."
-        )
+#         Use retrieve_agent_episodes() instead.
+#         """
+#         raise NotImplementedError(
+#             "AgentEpisodeBuffer is designed for PPO; "
+#             "use retrieve_agent_episodes() instead of sample()."
+#         )
 
-    def update(self, idx, error):
-        """
-        PPO does not require priority updates.
+#     def update(self, idx, error):
+#         """
+#         PPO does not require priority updates.
 
-        This method is a no-op for this buffer.
-        """
-        return
+#         This method is a no-op for this buffer.
+#         """
+#         return
 
-    def add_agent_episode(self, agent, action, value, obs, reward, done, policy_logits):
-        """
-        Add a single transition for the given agent.
+#     def add_agent_episode(self, agent, action, value, obs, reward, done, policy_logits):
+#         """
+#         Add a single transition for the given agent.
 
-        Parameters
-        ----------
-        agent : hashable
-            Agent identifier (e.g., agent_handle).
-        action, value, obs, reward, done, policy_logits :
-            Data associated with one step of the agent's episode.
-        """
-        agent_mem = self._memory.get(agent, [])
-        agent_mem.append([action, value, obs, reward, done, policy_logits])
-        self._memory[agent] = agent_mem
+#         Parameters
+#         ----------
+#         agent : hashable
+#             Agent identifier (e.g., agent_handle).
+#         action, value, obs, reward, done, policy_logits :
+#             Data associated with one step of the agent's episode.
+#         """
+#         agent_mem = self._memory.get(agent, [])
+#         agent_mem.append([action, value, obs, reward, done, policy_logits])
+#         self._memory[agent] = agent_mem
 
-    def retrieve_agent_episodes(self, agent):
-        """
-        Retrieve all stored transitions for a given agent.
+#     def retrieve_agent_episodes(self, agent):
+#         """
+#         Retrieve all stored transitions for a given agent.
 
-        Returns
-        -------
-        actions, values, obs, rewards, dones, logits
-            actions, values, obs, rewards, dones are NumPy arrays.
-            logits is returned as a list (PPOAgent can stack them as needed).
-        """
-        # If there is no stored episode for this agent, return empty arrays
-        if agent not in self._memory or len(self._memory[agent]) == 0:
-            return (
-                np.array([]),
-                np.array([]),
-                np.array([]),
-                np.array([]),
-                np.array([]),
-                [],
-            )
+#         Returns
+#         -------
+#         actions, values, obs, rewards, dones, logits
+#             actions, values, obs, rewards, dones are NumPy arrays.
+#             logits is returned as a list (PPOAgent can stack them as needed).
+#         """
+#         # If there is no stored episode for this agent, return empty arrays
+#         if agent not in self._memory or len(self._memory[agent]) == 0:
+#             return (
+#                 np.array([]),
+#                 np.array([]),
+#                 np.array([]),
+#                 np.array([]),
+#                 np.array([]),
+#                 [],
+#             )
 
-        # Unzip from [[...], [...], ...] into 6 separate sequences
-        actions, values, obs, rewards, dones, logits = zip(*self._memory[agent])
+#         # Unzip from [[...], [...], ...] into 6 separate sequences
+#         actions, values, obs, rewards, dones, logits = zip(*self._memory[agent])
 
-        actions = np.array(actions)
-        values = np.array(values)
-        obs = np.array(obs)
-        rewards = np.array(rewards)
-        dones = np.array(dones)
-        # logits are kept as a list; PPOAgent can stack/convert them as needed
+#         actions = np.array(actions)
+#         values = np.array(values)
+#         obs = np.array(obs)
+#         rewards = np.array(rewards)
+#         dones = np.array(dones)
+#         # logits are kept as a list; PPOAgent can stack/convert them as needed
 
-        return actions, values, obs, rewards, dones, logits
+#         return actions, values, obs, rewards, dones, logits
 
-    def reset(self):
-        """Clear all stored episodes for all agents."""
-        self._memory = {}
+#     def reset(self):
+#         """Clear all stored episodes for all agents."""
+#         self._memory = {}
 
-    def __len__(self):
-        """Return the total number of transitions over all agents."""
-        return sum(len(v) for v in self._memory.values())
+#     def __len__(self):
+#         """Return the total number of transitions over all agents."""
+#         return sum(len(v) for v in self._memory.values())
