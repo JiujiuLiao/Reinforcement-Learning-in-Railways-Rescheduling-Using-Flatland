@@ -89,7 +89,6 @@ class ExcHandler:
                 self._policy.episode_start()
 
                 score = 0
-                deadlocks = 0
                 action_dict = dict()
                 action_count = [0] * self._action_size
                 agent_obs = [None] * self._env_handler.get_num_agents()
@@ -101,6 +100,15 @@ class ExcHandler:
 
                 # Reset environment
                 obs, info = self._env_handler.reset()
+                
+                # ============================================================
+                # FIXED: Tracking for deadlock and stuck detection
+                # ============================================================
+                deadlocked_agents = set()          # Agents detected as deadlocked (hard deadlock)
+                stuck_agents = set()               # Agents stuck in loops (soft deadlock)
+                agent_last_distance = {}           # Track distance to target for each agent
+                agent_no_progress_counter = {}     # Count steps without making progress
+                NO_PROGRESS_THRESHOLD = 50         # Steps without progress to consider "stuck"
                 
                 # Reset per-episode tracking for reward shaping
                 self._prev_distances = {}
@@ -146,24 +154,11 @@ class ExcHandler:
                         action_dict.update({agent: action})
                     act_time = time.time() - act_time
 
-                    # Add diagnostic logging HERE (right after action selection, before env.step)
-                    # now it is commented out temporarily
-                    # print(f"\nStep {step}:")
-                    # for agent in self._env_handler.get_agents_handle():
-                    #     agent_obj = self._env_handler.env.agents[agent]
-                    #     print(f"  Agent {agent}: action={action_dict[agent]}, "
-                    #         f"status={agent_obj.status}, "
-                    #         f"position={agent_obj.position}, "
-                    #         f"target={agent_obj.target}, " 
-                    #         f"direction={agent_obj.direction}, "  
-                    #         f"deadlock={info['deadlocks'][agent]}, " 
-                    #         f"action_required={info['action_required'][agent]}")
-
                     # Environment step
                     next_obs, all_rewards, done, info = self._env_handler.step(action_dict)
 
                     # ============================================================
-                    # FIXED REWARD SHAPING - Properly scaled for multi-agent
+                    # REWARD SHAPING 
                     # ============================================================
                     train_time = time.time()
                     for agent in self._env_handler.get_agents_handle():
@@ -265,9 +260,39 @@ class ExcHandler:
                             )
 
                         score += shaped_reward
+                    
+                    # ============================================================
+                    # FIXED: Track deadlocked AND stuck agents
+                    # ============================================================
+                    for agent in self._env_handler.get_agents_handle():
+                        agent_obj = self._env_handler.env.agents[agent]
+                        
+                        # 1. Hard deadlock from detector
+                        if info["deadlocks"][agent]:
+                            deadlocked_agents.add(agent)
+                        
+                        # 2. Soft deadlock: agent not making progress toward target
+                        if agent_obj.status == RailAgentStatus.ACTIVE and agent_obj.position is not None:
+                            current_dist = abs(agent_obj.position[0] - agent_obj.target[0]) + \
+                                           abs(agent_obj.position[1] - agent_obj.target[1])
+                            
+                            prev_dist = agent_last_distance.get(agent, current_dist)
+                            
+                            # Check if agent is making progress (getting closer to target)
+                            if current_dist >= prev_dist:
+                                # Not making progress
+                                agent_no_progress_counter[agent] = agent_no_progress_counter.get(agent, 0) + 1
+                            else:
+                                # Making progress - reset counter
+                                agent_no_progress_counter[agent] = 0
+                            
+                            agent_last_distance[agent] = current_dist
+                            
+                            # If no progress for too long, mark as stuck
+                            if agent_no_progress_counter.get(agent, 0) >= NO_PROGRESS_THRESHOLD:
+                                stuck_agents.add(agent)
 
                     train_time = time.time() - train_time
-                    deadlocks += sum(info['deadlocks'].values())
 
                     log_data = {
                         "loss": self._policy.stats['loss'],
@@ -280,27 +305,71 @@ class ExcHandler:
                     if done['__all__']:
                         break
 
-                # Collect training statistics
-                tasks_finished = np.sum(
-                    [int(done[idx]) for idx in self._env_handler.get_agents_handle()]
-                )
-                action_probs = action_count / np.sum(action_count)
+                # ============================================================
+                # FIXED: Collect training statistics correctly
+                # ============================================================
+                tasks_finished = 0
+                tasks_failed = 0
+                
+                for idx in self._env_handler.get_agents_handle():
+                    agent = self._env_handler.env.agents[idx]
+                    
+                    # Check if agent successfully completed
+                    if agent.status == RailAgentStatus.DONE_REMOVED:
+                        tasks_finished += 1
+                    elif agent.status == RailAgentStatus.DONE:
+                        # DONE with position=None means reached target and was removed
+                        if agent.position is None:
+                            tasks_finished += 1
+                        else:
+                            # DONE but still has position - did not reach target
+                            tasks_failed += 1
+                            stuck_agents.add(idx)
+                    elif agent.status == RailAgentStatus.ACTIVE:
+                        # Agent still ACTIVE at episode end = failed to complete
+                        tasks_failed += 1
+                        # If not already marked as deadlocked, mark as stuck
+                        if idx not in deadlocked_agents:
+                            stuck_agents.add(idx)
+                    elif agent.status == RailAgentStatus.READY_TO_DEPART:
+                        # Agent never departed - count as failed
+                        tasks_failed += 1
 
                 n_agents = max(1, self._env_handler.env.get_num_agents())
+                completion_rate = tasks_finished / n_agents
+                
+                # Combine hard deadlocks and soft stuck agents for total "failed due to stuck" rate
+                all_stuck_agents = deadlocked_agents.union(stuck_agents)
+                deadlock_rate = len(all_stuck_agents) / n_agents
+                
+                normalized_steps = count_steps / self._max_steps
+                action_probs = action_count / np.sum(action_count)
 
-                avg_delay = (self._max_steps - count_steps) / self._max_steps
+                # Diagnostic - remove after verification
+                print(f"\n=== Episode {episode_idx} Summary ===")
+                print(f"Steps: {count_steps}/{self._max_steps}")
+                print(f"Episode ended: {'all done' if done['__all__'] else 'max steps reached'}")
+                print(f"Tasks finished: {tasks_finished}/{n_agents} = {completion_rate:.2%}")
+                print(f"Hard deadlocks: {deadlocked_agents}")
+                print(f"Soft stuck (no progress): {stuck_agents}")
+                print(f"Total stuck/deadlock rate: {deadlock_rate:.2%}")
+                for idx in self._env_handler.get_agents_handle():
+                    agent = self._env_handler.env.agents[idx]
+                    status_name = {0: "READY_TO_DEPART", 1: "ACTIVE", 2: "DONE", 3: "DONE_REMOVED"}.get(agent.status, "UNKNOWN")
+                    print(f"  Agent {idx}: status={status_name}({agent.status}), position={agent.position}, target={agent.target}")
+                print("=" * 40)
 
                 self._logger.log_episode(
                     {
                         **{
-                            "completions": tasks_finished / n_agents,
+                            "completions": completion_rate,
                             "scores": score / (self._max_steps * n_agents),
-                            "steps": count_steps / self._max_steps,
-                            "avg_delay": (self._max_steps - count_steps) / self._max_steps,
+                            "steps": normalized_steps,
+                            "avg_delay": normalized_steps,
                             "loss": self._policy.stats["loss"] / np.sum(action_count)
                             if self._policy.stats["loss"] is not None
                             else None,
-                            "deadlocks": sum(info["deadlocks"].values()) / n_agents,
+                            "deadlocks": deadlock_rate,
                             "exploration_prob": self._policy.stats.get("eps_val", 0.0),
                             "exploration_count": self._policy.stats.get("eps_counter", 0.0)
                             / np.sum(action_count),
@@ -333,7 +402,7 @@ class ExcHandler:
 
                 if self._verbose:
                     self._env_handler.print_results(episode_idx, self._logger.get_window('scores'),
-                                                    self._logger.get_window('completions'), self._logger.get_window('avg_delay'), action_probs, end)
+                                                    self._logger.get_window('completions'), self._logger.get_window('avg_delay'),self._logger.get_window('deadlocks'), action_probs, end)
 
             self._logger.run_end(self._trn_params, eval_score / (self._max_steps * self._env_handler.env.get_num_agents()),
                                  run_id)
@@ -413,15 +482,16 @@ class EnvHandler:
         if self._rendering:
             self._renderer = RenderTool(self.env)
 
-    def print_results(self, episode_idx, scores_window, completion_window, delay_window, action_probs, end):
+    def print_results(self, episode_idx, scores_window, completion_window, delay_window, deadlock_window, action_probs, end):
         print(
             '\rTraining {} agents on {}x{}\t Episode {}\t Average Score: {:.3f}\tCompletion Rate: {:.2f}%\t '
-            'Avg Delay: {:.2f}%\t Action Probabilities: \t {}'.format(
+            'Deadlock Rate: {:.2f}%\t Avg Delay: {:.2f}%\t Action Probabilities: \t {}'.format(
                 self.env.get_num_agents(),
                 self._params['x_dim'], self._params['y_dim'],
                 episode_idx,
                 np.mean(scores_window),
                 100 * np.mean(completion_window),
+                100 * np.mean(deadlock_window),
                 100 * np.mean(delay_window),
                 action_probs,
             ), end=end)

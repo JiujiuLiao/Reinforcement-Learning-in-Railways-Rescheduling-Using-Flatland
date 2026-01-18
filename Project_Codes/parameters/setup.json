@@ -32,7 +32,7 @@
         "target_update": 2000,
         "soft_update": true,
         "noisy_net": false,
-        "env": "phase1_two_agents"
+        "env": "phase2_three_agents"
     },
     "log": {
         "log_dir": "tmp/logs",
