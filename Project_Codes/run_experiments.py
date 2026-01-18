@@ -5,7 +5,7 @@ import os
 
 CURRICULUM = [
     # Phase 0: Single agent pathfinding (baseline)
-    # ("phase0_single", 500, False),      # Fresh start, learn basic navigation
+    ("phase0_single", 500, False),      # Fresh start, learn basic navigation
     
     # Phase 1: Two agents - learn basic collision avoidance
     ("phase1_two_agents", 1000, False), # Fresh start - don't transfer single-agent policy!

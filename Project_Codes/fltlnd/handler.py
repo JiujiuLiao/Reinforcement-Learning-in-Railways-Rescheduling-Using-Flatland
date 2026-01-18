@@ -62,7 +62,7 @@ class ExcHandler:
 
         # The action space of flatland is 5 discrete actions
         self._action_size = 5
-        self._state_size = self._obs_wrapper.get_state_size()+3
+        self._state_size = self._obs_wrapper.get_state_size() + self._obs_wrapper.n_global_features # Additional features for enhanced observation
 
         self._logger = self._logger_class(self._sys_params['base_dir'], self._log_params, self._tuning, synclog)
 
