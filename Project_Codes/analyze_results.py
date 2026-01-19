@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # General settings
 # -----------------------------
 BASE_DIR = ""          # Leave empty if the project is in the current folder
-LOG_DIR = "tmp/logs"   # Same directory used in setup.json
+LOG_DIR = "tmp/logs/wandb"   # Same directory used in setup.json
 PLOTS_DIR = "plots"    # Output directory for generated plots
 
 

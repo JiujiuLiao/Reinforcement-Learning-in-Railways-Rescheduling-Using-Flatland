@@ -8,19 +8,19 @@ CURRICULUM = [
     ("phase0_single", 500, False),      # Fresh start, learn basic navigation
     
     # Phase 1: Two agents - learn basic collision avoidance
-    ("phase1_two_agents", 1000, False), # Fresh start - don't transfer single-agent policy!
+    ("phase1_two_agents", 2000, False), # Fresh start - don't transfer single-agent policy!
     
     # Phase 2: Three agents - more complex coordination
-    ("phase2_three_agents", 1500, True), # Transfer from 2-agent policy
+    ("phase2_three_agents", 5000, True), # Transfer from 2-agent policy
     
     # Phase 3: Five agents - scale up
-    ("phase3_five_agents", 2000, True),  # Transfer from 3-agent policy
+    ("phase3_five_agents", 6000, True),  # Transfer from 3-agent policy
     
-    # Phase 4: Add malfunctions
-    # ("phase4_five_malfunction", 2500, True),  # Same agents, add disruptions
+    #Phase 4: Add malfunctions
+    ("phase4_five_malfunction", 7000, True),  # Same agents, add disruptions
     
     # Phase 5: Full scale
-    # ("phase5_ten_agents", 3000, True),   # Transfer to 10 agents
+    ("phase5_ten_agents", 6000, True),   # Transfer to 10 agents
 ]
 
 AGENTS = ["DQNAgent"]
