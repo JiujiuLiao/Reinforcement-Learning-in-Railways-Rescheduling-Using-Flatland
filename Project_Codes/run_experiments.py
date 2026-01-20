@@ -14,16 +14,16 @@ CURRICULUM = [
     ("phase2_three_agents", 2000, True), # Transfer from 2-agent policy
     
     # Phase 3: Five agents - scale up
-    ("phase3_five_agents", 4000, True),  # Transfer from 3-agent policy
+    ("phase3_five_agents", 3000, True),  # Transfer from 3-agent policy
     
     #Phase 4: Add malfunctions
-    ("phase4_five_malfunction", 5000, True),  # Same agents, add disruptions
+    #("phase4_five_malfunction", 5000, True),  # Same agents, add disruptions
     
     # Phase 5: Full scale
-    ("phase5_ten_agents", 9000, True),   # Transfer to 10 agents
+    #("phase5_ten_agents", 9000, True),   # Transfer to 10 agents
 ]
 
-AGENTS = ["DQNAgent"]
+AGENTS = ['PPOAgent']#"DQNAgent"]
 
 def clear_checkpoints():
     """Remove old checkpoints to ensure fresh start"""

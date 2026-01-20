@@ -3,7 +3,7 @@
         "seed": 42,
         "base_dir": "",
         "obs_class": "EnhancedTreeObs",
-        "agent_class": "DQNAgent",
+        "agent_class": "PPOAgent",
         "log_class": "WandBLogger",
         "memory_class": "ReplayBuffer",
         "predictor_class": "StochasticPathPredictor"
@@ -32,7 +32,10 @@
         "target_update": 2000,
         "soft_update": true,
         "noisy_net": false,
-        "env": "phase1_two_agents"
+        "env": "phase2_three_agents",
+        "surrogate_eps_clip": 0.1,
+        "loss_weight": 0.5,
+        "entropy_weight": 0.01
     },
     "log": {
         "log_dir": "tmp/logs",
