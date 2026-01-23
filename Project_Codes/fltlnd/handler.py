@@ -6,6 +6,7 @@ import time
 import random
 from flatland.envs import malfunction_generators as mal_gen
 import numpy as np
+import torch
 
 from flatland.envs.rail_env import RailEnv
 from flatland.envs.rail_generators import sparse_rail_generator
@@ -19,6 +20,10 @@ import fltlnd.logger as logger_classes
 import fltlnd.replay_buffer as memory_classes
 import fltlnd.predict as predictor_classes
 from flatland.envs.agent_utils import RailAgentStatus
+
+# Import action masking module
+# Use the improved v2 masking with MinimalActionMasker option
+from fltlnd.action_masking import ActionMasker, MinimalActionMasker
 
 
 class ExcHandler:
@@ -62,6 +67,89 @@ class ExcHandler:
         self._state_size = self._obs_wrapper.get_state_size() + self._obs_wrapper.n_global_features
 
         self._logger = self._logger_class(self._sys_params['base_dir'], self._log_params, self._tuning, synclog)
+
+        # ============================================================
+        # ACTION MASKING OPTIONS:
+        # 
+        # Option 1: MinimalActionMasker - RECOMMENDED
+        #   Only prevents immediate collisions (moving into occupied cell)
+        #   Lets the RL agent learn coordination naturally
+        #
+        # Option 2: ActionMasker with priority yielding
+        #   Forces lower-priority agents to yield
+        #   Can cause issues on single-track maps
+        #
+        # Option 3: Disable masking entirely
+        #   Set self._use_action_masking = False
+        # ============================================================
+        
+        # RECOMMENDED: Use minimal masking (collision avoidance only)
+        self._action_masker = MinimalActionMasker()
+        
+        # Alternative: Full priority-based masking (may cause issues)
+        # self._action_masker = ActionMasker(
+        #     conflict_radius=2,  # Reduced from 3
+        #     enable_priority_yielding=True,
+        #     enable_collision_avoidance=True,
+        #     conservative_mode=False
+        # )
+        
+        # Flag to enable/disable action masking
+        self._use_action_masking = True
+
+    def _get_masked_action(self, obs, agent_handle):
+        """
+        Select action with priority-based action masking applied.
+        
+        This replaces direct calls to self._policy.act() and ensures that:
+        1. Lower priority agents yield to higher priority agents in conflicts
+        2. Agents don't move into occupied cells
+        3. Invalid rail transitions are masked out
+        
+        Args:
+            obs: Normalized observation for this agent
+            agent_handle: The agent's handle (used for priority and mask computation)
+            
+        Returns:
+            Selected action (int)
+        """
+        # Get action mask for this agent
+        action_mask = self._action_masker.get_action_mask(
+            self._env_handler.env, agent_handle
+        )
+        
+        # Get Q-values from the policy network
+        state_tensor = torch.as_tensor(
+            obs, dtype=torch.float32
+        ).unsqueeze(0).to(self._policy._device)
+        
+        with torch.no_grad():
+            q_values = self._policy._model(state_tensor).cpu().numpy()[0]
+        
+        # Apply mask: set invalid actions to very negative value
+        masked_q = q_values.copy()
+        masked_q[action_mask == 0] = -1e9
+        
+        # Epsilon-greedy exploration with masking
+        # Only explore among valid actions
+        eps_val = self._policy.stats.get("eps_val", 0.0)
+        noisy_net = getattr(self._policy, 'noisy_net', False)
+        
+        if (eps_val > np.random.rand() 
+            and self._policy._exploration 
+            and not noisy_net):
+            
+            # Random selection from valid actions only
+            valid_actions = np.where(action_mask > 0)[0]
+            if len(valid_actions) == 0:
+                valid_actions = np.array([4])  # STOP_MOVING as fallback
+            action = int(np.random.choice(valid_actions))
+            self._policy.stats["eps_counter"] += 1
+        else:
+            # Greedy selection from masked Q-values
+            action = int(np.argmax(masked_q))
+        
+        return action
 
     def start(self, n_episodes):
         start_time = time.time()
@@ -125,12 +213,23 @@ class ExcHandler:
                     count_steps += 1
 
                     act_time = time.time()
+                    
+                    # ============================================================
+                    # MODIFIED: Action selection with priority-based masking
+                    # ============================================================
                     for agent in self._env_handler.get_agents_handle():
                         agent_obj = self._env_handler.env.agents[agent]
                         
                         if info['action_required'][agent]:
                             update_values = True
-                            action = self._policy.act(agent_obs[agent])
+                            
+                            # Use masked action selection if enabled
+                            if self._use_action_masking:
+                                action = self._get_masked_action(agent_obs[agent], agent)
+                            else:
+                                # Original behavior (no masking)
+                                action = self._policy.act(agent_obs[agent])
+                            
                             action_count[action] += 1
                         else: 
                             update_values = False
@@ -140,6 +239,8 @@ class ExcHandler:
                                 action = 0
                         
                         action_dict.update({agent: action})
+                    # ============================================================
+                    
                     act_time = time.time() - act_time
 
                     next_obs, all_rewards, done, info = self._env_handler.step(action_dict)
@@ -210,12 +311,37 @@ class ExcHandler:
                                 self._agent_stationary_steps[agent] = self._agent_stationary_steps.get(agent, 0) + 1
                                 stationary_steps = self._agent_stationary_steps[agent]
                                 
-                                if stationary_steps <= 3:
-                                    shaped_reward -= 0.03
-                                elif stationary_steps <= 10:
-                                    shaped_reward -= 0.1
+                                # ============================================================
+                                # MODIFIED: Reduced stationary penalty when action was masked
+                                # If the agent was forced to stop due to masking, don't penalize as much
+                                # ============================================================
+                                if self._use_action_masking:
+                                    # Check if MOVE_FORWARD was masked (agent was forced to stop)
+                                    action_mask = self._action_masker.get_action_mask(
+                                        self._env_handler.env, agent
+                                    )
+                                    if action_mask[2] == 0:  # MOVE_FORWARD was masked
+                                        # Reduced penalty - agent is yielding as intended
+                                        if stationary_steps <= 5:
+                                            shaped_reward -= 0.01  # Very small penalty
+                                        else:
+                                            shaped_reward -= 0.05  # Still some pressure to resolve
+                                    else:
+                                        # Normal penalty - agent chose to stop
+                                        if stationary_steps <= 3:
+                                            shaped_reward -= 0.03
+                                        elif stationary_steps <= 10:
+                                            shaped_reward -= 0.1
+                                        else:
+                                            shaped_reward -= 0.2
                                 else:
-                                    shaped_reward -= 0.2
+                                    # Original stationary penalty
+                                    if stationary_steps <= 3:
+                                        shaped_reward -= 0.03
+                                    elif stationary_steps <= 10:
+                                        shaped_reward -= 0.1
+                                    else:
+                                        shaped_reward -= 0.2
                             else:
                                 self._agent_stationary_steps[agent] = 0
                             
@@ -258,7 +384,7 @@ class ExcHandler:
                                     if agent > other_agent:
                                         # This agent should yield
                                         # If we stopped (action 4) or moved aside, reward
-                                        if action_dict[agent] == 4:  # STOP_MOVING
+                                        if action_dict[agent] == 2:  # STOP_MOVING
                                             shaped_reward += 0.1  # Reward for yielding
                                         # If other agent is moving toward target, extra reward
                                         if other_agent in self._prev_distances:
@@ -403,6 +529,7 @@ class ExcHandler:
                     print(f"Tasks finished: {tasks_finished}/{n_agents} = {completion_rate:.2%}")
                     print(f"Deadlocks: {len(deadlocked_agents)}, Stuck: {len(stuck_agents)}")
                     print(f"Exploration: {self._policy.stats.get('eps_val', 0):.3f}")
+                    print(f"Action masking: {'ENABLED' if self._use_action_masking else 'DISABLED'}")
                     print("=" * 40)
 
                 self._logger.log_episode(

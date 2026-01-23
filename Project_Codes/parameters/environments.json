@@ -43,10 +43,10 @@
 
     "phase3_five_agents": {
         "n_agents": 5,
-        "x_dim": 30,
-        "y_dim": 30,
-        "n_cities": 3,
-        "max_rails_between_cities": 2,
+        "x_dim": 35,
+        "y_dim": 35,
+        "n_cities": 5,
+        "max_rails_between_cities": 3,
         "max_rails_in_city": 3,
         "grid_mode": true,
         "malfunction_rate": 0.0,
@@ -57,10 +57,10 @@
 
     "phase4_five_malfunction": {
         "n_agents": 5,
-        "x_dim": 30,
-        "y_dim": 30,
-        "n_cities": 6,
-        "max_rails_between_cities": 2,
+        "x_dim": 35,
+        "y_dim": 35,
+        "n_cities": 5,
+        "max_rails_between_cities": 3,
         "max_rails_in_city": 3,
         "grid_mode": true,
         "malfunction_rate": 0.005,
@@ -71,9 +71,9 @@
 
     "phase5_ten_agents": {
         "n_agents": 10,
-        "x_dim": 45,
-        "y_dim": 45,
-        "n_cities": 12,
+        "x_dim": 50,
+        "y_dim": 50,
+        "n_cities": 10,
         "max_rails_between_cities": 4,
         "max_rails_in_city": 3,
         "grid_mode": false,

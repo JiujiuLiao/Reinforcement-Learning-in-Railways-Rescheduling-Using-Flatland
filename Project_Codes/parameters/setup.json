@@ -3,7 +3,7 @@
         "seed": 42,
         "base_dir": "",
         "obs_class": "EnhancedTreeObs",
-        "agent_class": "PPOAgent",
+        "agent_class": "DoubleDuelingDQNAgent",
         "log_class": "WandBLogger",
         "memory_class": "ReplayBuffer",
         "predictor_class": "StochasticPathPredictor"
@@ -15,27 +15,24 @@
     },
     "trn": {
         "memory_size": 100000,
-        "batch_size": 64,
+        "batch_size": 128,
         "update_every": 8,
-        "learning_rate": 0.0005,
+        "learning_rate": 5e-05,
         "tau": 0.001,
-        "gamma": 0.95,
+        "gamma": 0.99,
         "buffer_min_size": 10000,
         "hidden_sizes": [
             256,
             256
         ],
         "exp_start": 1.0,
-        "exp_end": 0.01,
-        "exp_decay": 0.997,
+        "exp_end": 0.05,
+        "exp_decay": 0.999,
         "checkpoint_freq": 100,
-        "target_update": 2000,
+        "target_update": 1000,
         "soft_update": true,
         "noisy_net": false,
-        "env": "phase2_three_agents",
-        "surrogate_eps_clip": 0.1,
-        "loss_weight": 0.5,
-        "entropy_weight": 0.01
+        "env": "phase0_single"
     },
     "log": {
         "log_dir": "tmp/logs",

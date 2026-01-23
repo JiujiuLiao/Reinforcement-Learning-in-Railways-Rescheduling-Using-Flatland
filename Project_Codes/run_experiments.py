@@ -8,13 +8,13 @@ CURRICULUM = [
     ("phase0_single", 500, False),      # Fresh start, learn basic navigation
     
     # Phase 1: Two agents - learn basic collision avoidance
-    ("phase1_two_agents", 1000, False), # Fresh start - don't transfer single-agent policy!
+    ("phase1_two_agents", 1500, False), # Fresh start - don't transfer single-agent policy!
     
     # Phase 2: Three agents - more complex coordination
-    ("phase2_three_agents", 2000, True), # Transfer from 2-agent policy
+    ("phase2_three_agents", 2500, True), # Transfer from 2-agent policy
     
     # Phase 3: Five agents - scale up
-    ("phase3_five_agents", 3000, True),  # Transfer from 3-agent policy
+    ("phase3_five_agents", 3500, True),  # Transfer from 3-agent policy 
     
     #Phase 4: Add malfunctions
     #("phase4_five_malfunction", 5000, True),  # Same agents, add disruptions
@@ -23,7 +23,29 @@ CURRICULUM = [
     #("phase5_ten_agents", 9000, True),   # Transfer to 10 agents
 ]
 
-AGENTS = ['PPOAgent']#"DQNAgent"]
+AGENTS = ["DQNAgent","DoubleDQNAgent","DuelingDQNAgent","DoubleDuelingDQNAgent"]#'PPOAgent']
+
+def run(agent, env, episodes, transfer_learning=True):
+    # Load setup.json
+    with open("parameters/setup.json", "r") as f:
+        cfg = json.load(f)
+    
+    # Set agent and environment
+    cfg["sys"]["agent_class"] = agent
+    cfg["trn"]["env"] = env
+    
+    # Simple exploration reset
+    if transfer_learning:
+        cfg["trn"]["exp_start"] = 0.5   # Boost but not full reset
+    else:
+        cfg["trn"]["exp_start"] = 1.0   # Fresh start
+    
+    cfg["trn"]["exp_decay"] = 0.999     # Same slow decay for all
+    cfg["trn"]["exp_end"] = 0.05
+    
+    # Save
+    with open("parameters/setup.json", "w") as f:
+        json.dump(cfg, f, indent=4)
 
 def clear_checkpoints():
     """Remove old checkpoints to ensure fresh start"""

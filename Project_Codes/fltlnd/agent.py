@@ -233,7 +233,6 @@ class NNAgent(Agent):
 #  Simple DQN network 
 # ------------------------------
 
-
 class DQNNet(nn.Module):
     def __init__(self, state_size: int, action_size: int, hidden_sizes: List[int]):
         super().__init__()
@@ -249,7 +248,6 @@ class DQNNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
-
 
 # ------------------------------
 #  DQN Agent (SB3-like behaviour)
@@ -413,105 +411,119 @@ class DQNAgent(NNAgent):
         return "dqn-agent"
 
 
-
-
-
-
-
-
-
 #all below is comented out temporarily
 # ------------------------------
 #  Double DQN
 # ------------------------------
-
-
 class DoubleDQNAgent(DQNAgent):
-    def step(self, obs, action, reward, next_obs, done, agent):
-        self._step_count += 1
-        self._memory.add(obs, action, reward, next_obs, done)
+    """
+    Double DQN: Decouples action selection from value estimation.
+    - Online network selects the best action
+    - Target network evaluates that action
+    This reduces overestimation bias in Q-learning.
+    """
+    
+    def train(self):
+        (
+            state_sample,
+            action_sample,
+            rewards_sample,
+            state_next_sample,
+            done_sample,
+        ) = self._memory.sample()
 
-        # Train every N steps, only if buffer has enough samples
-        if (
-            self._step_count % self._update_every == 0
-            and len(self._memory) >= self._buffer_min_size
-            and len(self._memory) >= self._batch_size
-        ):
-            self.train()
-            
-            # Update target network AFTER training (soft update)
-            if self._soft_update:
-                self._soft_update_target()
-        
-        #  Hard update: separate counter, less frequent
-        if not self._soft_update:
-            # Only count training steps, not environment steps
-            if hasattr(self, '_training_steps'):
-                if self._training_steps % (self._target_update // self._update_every) == 0:
-                    self._hard_update_target()
+        states = torch.as_tensor(state_sample, dtype=torch.float32).to(self._device)
+        actions = torch.as_tensor(action_sample, dtype=torch.long).to(self._device)
+        rewards = torch.as_tensor(rewards_sample, dtype=torch.float32).to(self._device)
+        next_states = torch.as_tensor(state_next_sample, dtype=torch.float32).to(self._device)
+        dones = torch.as_tensor(done_sample, dtype=torch.float32).to(self._device)
 
-    def load(self, filename):
-        super().load(filename)
-        self._create_target()
+        with torch.no_grad():
+            # DOUBLE DQN: Online selects, target evaluates
+            online_q_next = self._model(next_states)
+            best_actions = online_q_next.argmax(dim=1, keepdim=True)
+            target_q_next = self._target_model(next_states)
+            max_future_q = target_q_next.gather(1, best_actions).squeeze(1)
+            updated_q_values = rewards + self._gamma * max_future_q * (1 - dones)
 
-    def create(self):
-        super().create()
-        self._create_target()
+        q_values = self._model(states)
+        q_action = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-    def init_params(self):
-        super().init_params()
-        self._tau = self._params["tau"]
-        self._target_update = self._params["target_update"]
-        self._soft_update = self._params["soft_update"]
+        loss = self._loss_fn(q_action, updated_q_values)
+        self.stats["loss"] = float(loss.item())
 
-    def _create_target(self):
-        self._model_target = self.build_network().to(self._device)
-        self._model_target.load_state_dict(self._model.state_dict())
+        self._optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+        self._optimizer.step()
 
-    def _get_future_rewards(self, next_states: torch.Tensor) -> torch.Tensor:
-        # Double DQN with a target network
-        return self._model_target(next_states)
+        if hasattr(self._memory, "update"):
+            self._memory.update(loss.detach().cpu().numpy())
 
     def __str__(self):
         return "double-dqn-agent"
 
 
 # ------------------------------
-#  Dueling DQN (PyTorch)
+#  Dueling DQN
 # ------------------------------
-
-
 class DuelingDQNNet(nn.Module):
-    def __init__(self, state_size: int, action_size: int):
+    """
+    Dueling architecture: Separate streams for Value and Advantage.
+    Q(s,a) = V(s) + (A(s,a) - mean(A(s,:)))
+    """
+    def __init__(self, state_size: int, action_size: int, hidden_sizes: list = None):
         super().__init__()
-        self.fc1 = nn.Linear(state_size, 1024)
-        self.fc2 = nn.Linear(1024, 512)
-
-        self.value = nn.Linear(512, 1)
-        self.advantage = nn.Linear(512, action_size)
+        # Use hidden_sizes if provided, else default
+        h1 = hidden_sizes[0] if hidden_sizes else 256
+        h2 = hidden_sizes[1] if hidden_sizes and len(hidden_sizes) > 1 else 256
+        
+        # Shared feature extractor
+        self.fc1 = nn.Linear(state_size, h1)
+        self.fc2 = nn.Linear(h1, h2)
+        
+        # Value stream
+        self.value = nn.Linear(h2, 1)
+        
+        # Advantage stream
+        self.advantage = nn.Linear(h2, action_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-
-        v = self.value(x)  # [B, 1]
-        a = self.advantage(x)  # [B, A]
+        
+        v = self.value(x)           # [B, 1]
+        a = self.advantage(x)       # [B, A]
         a_mean = a.mean(dim=1, keepdim=True)
+        
+        # Combine: Q = V + (A - mean(A))
         q = v + (a - a_mean)
         return q
 
 
 class DuelingDQNAgent(DQNAgent):
+    """
+    Dueling DQN: Uses dueling network architecture.
+    Training logic is same as vanilla DQN.
+    """
     def build_network(self) -> nn.Module:
-        return DuelingDQNNet(self._state_size, self._action_size)
+        return DuelingDQNNet(self._state_size, self._action_size, self._hidden_sizes)
 
     def __str__(self):
         return "dueling-dqn-agent"
 
 
+# ------------------------------
+#  Double Dueling DQN (D3QN)
+# ------------------------------
 class DDDQNAgent(DuelingDQNAgent, DoubleDQNAgent):
+    """
+    Combines Dueling architecture with Double DQN training.
+    - Network: DuelingDQNNet (from DuelingDQNAgent.build_network)
+    - Training: Double DQN Q-target (from DoubleDQNAgent.train)
+    """
     def __str__(self):
-        return "dddqn-agent"
+        return "d3qn-agent"
 
 
 # ------------------------------
