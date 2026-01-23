@@ -211,7 +211,7 @@ def main():
             plot_metric_by_env(df, metric_base, env, ylabel=ylabel)
 
     # Summary bar charts for last N episodes
-    last_n = 50
+    last_n = 100
     for metric_base, _ in metrics:
         pivot = summary_table(df, metric_base, last_n=last_n)
         if pivot is not None:
@@ -222,3 +222,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

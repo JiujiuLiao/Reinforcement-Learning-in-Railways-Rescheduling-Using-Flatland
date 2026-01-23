@@ -14,16 +14,20 @@ CURRICULUM = [
     ("phase2_three_agents", 2500, True), # Transfer from 2-agent policy
     
     # Phase 3: Five agents - scale up
-    ("phase3_five_agents", 3500, True),  # Transfer from 3-agent policy 
+    ("phase3_five_agents", 4500, True),  # Transfer from 3-agent policy 
     
-    #Phase 4: Add malfunctions
-    #("phase4_five_malfunction", 5000, True),  # Same agents, add disruptions
+    #Phase 4: Seven agents 
+    ("phase4_seven_agents", 6500, True),  
     
-    # Phase 5: Full scale
-    #("phase5_ten_agents", 9000, True),   # Transfer to 10 agents
+    # Phase 5: seven agents with malfunctions
+    ("phase5_seven_malfunction", 9000, True), # Same agents, add disruptions 
+
+    ("phase6_ten_agents", 12000, True),   # Final phase with 10 agents
+    
+    ("phase7_ten_malfunction", 15000, True),   # Final phase with 10 agents and malfunctions
 ]
 
-AGENTS = ["DQNAgent","DoubleDQNAgent","DuelingDQNAgent","DoubleDuelingDQNAgent"]#'PPOAgent']
+AGENTS = ["DQNAgent","DoubleDQNAgent","DuelingDQNAgent","DDDQNAgent"]#,"PPOAgent"]
 
 def run(agent, env, episodes, transfer_learning=True):
     # Load setup.json
