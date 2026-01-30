@@ -1,32 +1,32 @@
 """
-Visualization Script for Flatland RL Results
+Visualization Script for Flatland RL Agents
 
-This script loads a trained agent and renders episodes, saving:
-1. Individual frames as PNG images
-2. A video (MP4/GIF) of the episode
+Renders trained agents in the Flatland environment and saves:
+- MP4 videos
+- GIF animations  
+- PNG frames
+- Summary images
 
 Usage:
-    python visualize_results.py --env phase1_two_agents --episodes 5 --save_video
-    python visualize_results.py --env phase5_ten_agents --episodes 3 --save_frames
-    
-Requirements:
-    pip install imageio imageio-ffmpeg pillow
+    python visualize_results.py --agent DQNAgent --env phase3_five_agents --episodes 5 --save_video
+    python visualize_results.py --agent DDDQNAgent --env phase3_five_agents --episodes 3 --save_gif
 """
 
 import os
 import sys
 import json
 import argparse
-import time
-from datetime import datetime
-
+import torch
 import numpy as np
 import imageio
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
 
 from flatland.envs.rail_env import RailEnv
 from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator
 from flatland.envs import malfunction_generators as mal_gen
+from flatland.envs.agent_utils import RailAgentStatus
 from flatland.utils.rendertools import RenderTool
 
 # Add project root to path
@@ -39,8 +39,62 @@ import fltlnd.replay_buffer as memory_classes
 import fltlnd.predict as predictor_classes
 
 
-def create_environment(env_config, obs_builder, seed=42):
-    """Create a Flatland environment from config."""
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+def get_checkpoint_state_size(checkpoint_path: str) -> int:
+    """
+    Extract the expected state size from a saved checkpoint.
+    
+    Args:
+        checkpoint_path: Path to .pt checkpoint file
+        
+    Returns:
+        State size (input dimension of first layer)
+    """
+    if not os.path.exists(checkpoint_path):
+        return None
+    
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        state_dict = checkpoint.get('model_state_dict', checkpoint)
+        
+        # Find the first linear layer's weight
+        for key, value in state_dict.items():
+            if 'weight' in key and len(value.shape) == 2:
+                # Shape is [out_features, in_features]
+                return value.shape[1]
+    except Exception as e:
+        print(f"Warning: Could not read checkpoint: {e}")
+    
+    return None
+
+
+def get_checkpoint_path(agent_name: str, base_dir: str = "") -> str:
+    """Get the checkpoint file path for an agent."""
+    # Convert agent class name to checkpoint filename
+    # DQNAgent -> dqn-agent.pt
+    # DoubleDQNAgent -> double-dqn-agent.pt
+    # DuelingDQNAgent -> dueling-dqn-agent.pt
+    # DDDQNAgent -> d3qn-agent.pt
+    
+    name_mapping = {
+        'DQNAgent': 'dqn-agent',
+        'DoubleDQNAgent': 'double-dqn-agent',
+        'DuelingDQNAgent': 'dueling-dqn-agent',
+        'DDDQNAgent': 'd3qn-agent',
+        'PPOAgent': 'ppo',
+    }
+    
+    checkpoint_name = name_mapping.get(agent_name, agent_name.lower().replace('agent', '-agent'))
+    checkpoint_dir = os.path.join(base_dir, "checkpoints") if base_dir else "checkpoints"
+    
+    return os.path.join(checkpoint_dir, f"{checkpoint_name}.pt")
+
+
+def create_environment(env_config: dict, obs_builder, seed: int = 42) -> RailEnv:
+    """Create a Flatland environment from configuration."""
     min_mal, max_mal = env_config.get("malfunction_duration", [0, 0])
     malfunction_rate = env_config.get("malfunction_rate", 0.0)
     
@@ -63,7 +117,8 @@ def create_environment(env_config, obs_builder, seed=42):
             malfunction_generator=mal_gen.ParamMalfunctionGen(mal_params),
             random_seed=seed
         )
-    except AttributeError:
+    except (AttributeError, TypeError):
+        # Fallback for older Flatland versions
         env = RailEnv(
             width=env_config["x_dim"],
             height=env_config["y_dim"],
@@ -84,74 +139,223 @@ def create_environment(env_config, obs_builder, seed=42):
     return env
 
 
-def load_agent(agent_class_name, state_size, action_size, params, base_dir=""):
-    """Load a trained agent from checkpoint."""
+# =============================================================================
+# OBSERVATION WRAPPER
+# =============================================================================
+
+class ObservationManager:
+    """
+    Manages observation creation and normalization.
+    
+    Automatically matches observation size to checkpoint requirements.
+    """
+    
+    def __init__(self, setup: dict, checkpoint_state_size: int = None):
+        self.setup = setup
+        self.checkpoint_state_size = checkpoint_state_size
+        
+        obs_params = setup['obs']
+        predictor = None
+        
+        # Create predictor if specified
+        if setup['sys'].get('predictor_class'):
+            predictor_class = getattr(predictor_classes, setup['sys']['predictor_class'])
+            predictor = predictor_class(obs_params)
+        
+        # Determine which observation class to use based on checkpoint
+        self._select_observation_class(setup, predictor, obs_params)
+        
+        self.predictor = predictor
+    
+    def _select_observation_class(self, setup: dict, predictor, obs_params: dict):
+        """Select observation class that matches checkpoint state size."""
+        obs_class_name = setup['sys'].get('obs_class', 'TreeObs')
+        
+        # Try the configured observation class first
+        obs_class = getattr(obs_classes, obs_class_name)
+        self.obs_wrapper = obs_class(obs_params, predictor)
+        
+        # Calculate state size for this observation class
+        base_size = self.obs_wrapper.get_state_size()
+        n_global = getattr(self.obs_wrapper, 'n_global_features', 3)
+        current_state_size = base_size + n_global
+        
+        print(f"Observation class: {obs_class_name}")
+        print(f"  Base size: {base_size}, Global features: {n_global}")
+        print(f"  Total state size: {current_state_size}")
+        
+        # If we have a checkpoint, check if sizes match
+        if self.checkpoint_state_size is not None:
+            print(f"  Checkpoint expects: {self.checkpoint_state_size}")
+            
+            if current_state_size != self.checkpoint_state_size:
+                # Try to find a matching observation class
+                print(f"\n  WARNING: State size mismatch!")
+                
+                # If checkpoint expects fewer features, try TreeObs
+                if self.checkpoint_state_size == base_size + 3:
+                    print(f"  Switching to TreeObs (3 global features)...")
+                    self.obs_wrapper = obs_classes.TreeObs(obs_params, predictor)
+                    n_global = 3
+                else:
+                    print(f"  Could not find matching observation class.")
+                    print(f"  Will truncate/pad observations to match checkpoint.")
+        
+        self.state_size = self.checkpoint_state_size or (base_size + n_global)
+        self.n_global_features = n_global
+    
+    @property
+    def builder(self):
+        return self.obs_wrapper.builder
+    
+    def reset(self):
+        """Reset observation wrapper state."""
+        if hasattr(self.obs_wrapper, 'reset'):
+            self.obs_wrapper.reset()
+    
+    def normalize(self, observation, env, agent_handle: int) -> np.ndarray:
+        """
+        Normalize observation and ensure correct size for checkpoint.
+        """
+        # Create a fake env handler for observation normalization
+        class EnvProxy:
+            def __init__(self, env, config=None):
+                self.env = env
+                self.x_dim = env.width
+                self.y_dim = env.height
+            def get_num_agents(self):
+                return self.env.get_num_agents()
+        
+        env_proxy = EnvProxy(env)
+        
+        # Set env reference for obs_wrapper if needed
+        if hasattr(self.obs_wrapper, 'env'):
+            self.obs_wrapper.env = env_proxy
+        
+        # Normalize observation
+        normalized = self.obs_wrapper.normalize(observation, env_proxy, agent_handle)
+        
+        # Adjust size if needed
+        if len(normalized) != self.state_size:
+            if len(normalized) > self.state_size:
+                # Truncate extra features
+                normalized = normalized[:self.state_size]
+            else:
+                # Pad with zeros
+                padded = np.zeros(self.state_size)
+                padded[:len(normalized)] = normalized
+                normalized = padded
+        
+        return normalized
+
+
+# =============================================================================
+# AGENT LOADER
+# =============================================================================
+
+def load_agent(agent_class_name: str, state_size: int, params: dict, 
+               base_dir: str = "", checkpoint_path: str = None):
+    """
+    Load a trained agent from checkpoint.
+    
+    Args:
+        agent_class_name: Name of agent class (e.g., 'DQNAgent')
+        state_size: Size of observation state
+        params: Training parameters
+        base_dir: Base directory for checkpoints
+        checkpoint_path: Optional explicit checkpoint path
+        
+    Returns:
+        Loaded agent with exploration disabled
+    """
     agent_class = getattr(agent_classes, agent_class_name)
     memory_class = memory_classes.ReplayBuffer
+    action_size = 5
     
+    # Create agent
     agent = agent_class(
-        state_size,
-        action_size,
-        params,
-        memory_class,
-        exploration=False,  # No exploration during visualization
-        train_best=True,    # Load best checkpoint
+        state_size=state_size,
+        action_size=action_size,
+        params=params,
+        memory_class=memory_class,
+        exploration=False,  # Disable exploration for visualization
+        train_best=False,   # Don't auto-load, we'll load manually
         base_dir=base_dir,
         checkpoint=None
     )
     
-    # Disable exploration completely
-    agent.stats["eps_val"] = 0.0
+    # Determine checkpoint path
+    if checkpoint_path is None:
+        checkpoint_path = get_checkpoint_path(agent_class_name, base_dir)
+    
+    # Load checkpoint
+    if os.path.exists(checkpoint_path):
+        checkpoint_base = checkpoint_path[:-3] if checkpoint_path.endswith('.pt') else checkpoint_path
+        agent.load(checkpoint_base)
+        print(f"Loaded checkpoint: {checkpoint_path}")
+    else:
+        print(f"WARNING: Checkpoint not found: {checkpoint_path}")
+        print("Using untrained agent!")
+    
+    # Ensure exploration is disabled
+    agent.stats['eps_val'] = 0.0
+    agent._exploration = False
     
     return agent
 
 
-def run_episode_with_rendering(env, agent, obs_wrapper, renderer, deadlock_detector,
-                                max_steps, save_dir=None, episode_idx=0,
-                                save_frames=False, frame_interval=1):
+# =============================================================================
+# EPISODE RUNNER
+# =============================================================================
+
+def run_episode(env: RailEnv, agent, obs_manager: ObservationManager, 
+                renderer: RenderTool, deadlock_detector: DeadlocksDetector,
+                max_steps: int, capture_frames: bool = True, 
+                frame_interval: int = 1) -> tuple:
     """
-    Run one episode and optionally save frames.
+    Run a single episode with rendering.
     
     Returns:
-        frames: list of RGB arrays (for video creation)
-        metrics: dict with completion, deadlocks, steps
+        frames: List of RGB image arrays
+        metrics: Dictionary with episode statistics
     """
     frames = []
     
-    # Reset environment
+    # Reset environment and observation manager
     obs, info = env.reset(regenerate_rail=True, regenerate_schedule=True)
+    obs_manager.reset()
     deadlock_detector.reset(env.get_num_agents())
     
-    # Build initial observations
-    agent_obs = [None] * env.get_num_agents()
-    for handle in range(env.get_num_agents()):
-        if obs[handle]:
-            agent_obs[handle] = obs_wrapper.normalize(obs[handle], None, handle)
+    # Initialize observations
+    num_agents = env.get_num_agents()
+    agent_obs = [None] * num_agents
     
-    # Render initial state
-    renderer.reset()
-    frame = renderer.render_env(
-        show=False,
-        show_observations=False,
-        show_predictions=False,
-        return_image=True
-    )
-    if frame is not None:
-        frames.append(frame)
-        if save_frames and save_dir:
-            save_frame(frame, save_dir, episode_idx, 0)
+    for handle in range(num_agents):
+        if obs[handle] is not None:
+            agent_obs[handle] = obs_manager.normalize(obs[handle], env, handle)
+    
+    # Capture initial frame
+    if capture_frames:
+        renderer.reset()
+        frame = renderer.render_env(
+            show=False,
+            show_observations=False,
+            show_predictions=False,
+            return_image=True
+        )
+        if frame is not None:
+            frames.append(frame)
     
     # Run episode
     step = 0
-    done_dict = {i: False for i in range(env.get_num_agents())}
-    done_dict['__all__'] = False
+    done_dict = {'__all__': False}
     
     while not done_dict['__all__'] and step < max_steps:
         step += 1
         
-        # Get actions from agent
+        # Get actions
         actions = {}
-        for handle in range(env.get_num_agents()):
+        for handle in range(num_agents):
             if info['action_required'][handle] and agent_obs[handle] is not None:
                 actions[handle] = agent.act(agent_obs[handle])
             else:
@@ -161,15 +365,15 @@ def run_episode_with_rendering(env, agent, obs_wrapper, renderer, deadlock_detec
         obs, rewards, done_dict, info = env.step(actions)
         
         # Update observations
-        for handle in range(env.get_num_agents()):
-            if obs[handle]:
-                agent_obs[handle] = obs_wrapper.normalize(obs[handle], None, handle)
+        for handle in range(num_agents):
+            if obs[handle] is not None:
+                agent_obs[handle] = obs_manager.normalize(obs[handle], env, handle)
         
-        # Check deadlocks
+        # Update deadlock detection
         deadlocks = deadlock_detector.step(env)
         
-        # Render and capture frame
-        if step % frame_interval == 0:
+        # Capture frame
+        if capture_frames and step % frame_interval == 0:
             frame = renderer.render_env(
                 show=False,
                 show_observations=False,
@@ -178,128 +382,178 @@ def run_episode_with_rendering(env, agent, obs_wrapper, renderer, deadlock_detec
             )
             if frame is not None:
                 frames.append(frame)
-                if save_frames and save_dir:
-                    save_frame(frame, save_dir, episode_idx, step)
     
-    # Calculate metrics
-    completed = sum(1 for i in range(env.get_num_agents()) if done_dict[i])
+    # Calculate metrics - check ACTUAL completion status, not just done flag
+    # An agent is truly "completed" only if it reached its target (DONE or DONE_REMOVED status)
+    completed = 0
+    for handle in range(num_agents):
+        agent_status = env.agents[handle].status
+        if agent_status in [RailAgentStatus.DONE, RailAgentStatus.DONE_REMOVED]:
+            completed += 1
+    
     deadlock_count = sum(deadlocks)
     
     metrics = {
-        'completion_rate': completed / env.get_num_agents(),
-        'deadlock_rate': deadlock_count / env.get_num_agents(),
+        'completion_rate': completed / num_agents,
+        'deadlock_rate': deadlock_count / num_agents,
         'steps': step,
         'completed': completed,
-        'total_agents': env.get_num_agents()
+        'deadlocks': deadlock_count,
+        'total_agents': num_agents,
+        'max_steps': max_steps,
+        'timed_out': step >= max_steps and not done_dict['__all__'],
     }
     
     return frames, metrics
 
 
-def save_frame(frame, save_dir, episode_idx, step):
-    """Save a single frame as PNG."""
-    filename = os.path.join(save_dir, f"episode_{episode_idx:03d}_step_{step:04d}.png")
-    imageio.imwrite(filename, frame)
+# =============================================================================
+# OUTPUT FUNCTIONS
+# =============================================================================
+
+def save_frames_to_disk(frames: list, save_dir: str, episode_idx: int):
+    """Save individual frames as PNG files."""
+    for i, frame in enumerate(frames):
+        filepath = os.path.join(save_dir, f"episode_{episode_idx:03d}_frame_{i:04d}.png")
+        imageio.imwrite(filepath, frame)
+    print(f"  Saved {len(frames)} frames to {save_dir}")
 
 
-def save_video(frames, filepath, fps=10):
+def save_video(frames: list, filepath: str, fps: int = 10):
     """Save frames as video (MP4 or GIF)."""
+    if not frames:
+        print("  No frames to save!")
+        return
+    
     if filepath.endswith('.gif'):
         imageio.mimsave(filepath, frames, fps=fps, loop=0)
     else:
         imageio.mimsave(filepath, frames, fps=fps)
-    print(f"Video saved: {filepath}")
+    print(f"  Video saved: {filepath}")
 
 
-def create_visualization_summary(frames, metrics, save_dir, episode_idx):
-    """Create a summary image with first, middle, and last frame."""
+def create_summary_image(frames: list, metrics: dict, filepath: str):
+    """Create a summary image showing start, middle, and end states."""
     if len(frames) < 3:
         return
     
-    from PIL import Image, ImageDraw, ImageFont
+    # Select key frames
+    first = frames[0]
+    middle = frames[len(frames) // 2]
+    last = frames[-1]
     
-    # Select frames
-    first_frame = frames[0]
-    middle_frame = frames[len(frames) // 2]
-    last_frame = frames[-1]
-    
-    # Convert to PIL images
-    img1 = Image.fromarray(first_frame)
-    img2 = Image.fromarray(middle_frame)
-    img3 = Image.fromarray(last_frame)
+    # Convert to PIL
+    img1 = Image.fromarray(first)
+    img2 = Image.fromarray(middle)
+    img3 = Image.fromarray(last)
     
     # Create combined image
-    width = img1.width
-    height = img1.height
-    combined = Image.new('RGB', (width * 3 + 40, height + 80), color='white')
+    w, h = img1.width, img1.height
+    padding = 10
+    header_height = 50
+    
+    combined = Image.new('RGB', (w * 3 + padding * 4, h + header_height + padding * 2), 'white')
     
     # Paste frames
-    combined.paste(img1, (10, 60))
-    combined.paste(img2, (width + 20, 60))
-    combined.paste(img3, (width * 2 + 30, 60))
+    y_offset = header_height + padding
+    combined.paste(img1, (padding, y_offset))
+    combined.paste(img2, (w + padding * 2, y_offset))
+    combined.paste(img3, (w * 2 + padding * 3, y_offset))
     
     # Add text
     draw = ImageDraw.Draw(combined)
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        label_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
     except:
-        font = ImageFont.load_default()
-        small_font = font
+        title_font = ImageFont.load_default()
+        label_font = title_font
     
     # Title
-    title = f"Episode {episode_idx} - Completion: {metrics['completion_rate']*100:.0f}% ({metrics['completed']}/{metrics['total_agents']} agents)"
-    draw.text((10, 10), title, fill='black', font=font)
+    title = f"Completion: {metrics['completion_rate']*100:.0f}% ({metrics['completed']}/{metrics['total_agents']}) | Steps: {metrics['steps']}"
+    draw.text((padding, 10), title, fill='black', font=title_font)
     
     # Labels
-    draw.text((10 + width//2 - 30, 40), "Start", fill='black', font=small_font)
-    draw.text((width + 20 + width//2 - 30, 40), "Middle", fill='black', font=small_font)
-    draw.text((width*2 + 30 + width//2 - 30, 40), "End", fill='black', font=small_font)
+    labels = ["Start", "Middle", "End"]
+    for i, label in enumerate(labels):
+        x = padding + i * (w + padding) + w // 2 - 20
+        draw.text((x, header_height - 5), label, fill='gray', font=label_font)
     
-    # Save
-    summary_path = os.path.join(save_dir, f"summary_episode_{episode_idx:03d}.png")
-    combined.save(summary_path)
-    print(f"Summary saved: {summary_path}")
+    combined.save(filepath)
+    print(f"  Summary saved: {filepath}")
 
+
+# =============================================================================
+# MAIN
+# =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Visualize trained Flatland agent")
-    parser.add_argument("--env", type=str, default="phase1_two_agents",
-                        help="Environment name from environments.json")
+    parser = argparse.ArgumentParser(
+        description="Visualize trained Flatland RL agents",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python visualize_results.py --agent DQNAgent --env phase3_five_agents --episodes 5 --save_video
+    python visualize_results.py --agent DDDQNAgent --episodes 3 --save_gif --fps 15
+    python visualize_results.py --agent DoubleDQNAgent --save_frames --frame_interval 5
+        """
+    )
+    
+    # Required arguments
     parser.add_argument("--agent", type=str, default="DQNAgent",
-                        help="Agent class name")
+                        help="Agent class name (DQNAgent, DoubleDQNAgent, DuelingDQNAgent, DDDQNAgent)")
+    parser.add_argument("--env", type=str, default="phase3_five_agents",
+                        help="Environment name from environments.json")
+    
+    # Episode settings
     parser.add_argument("--episodes", type=int, default=3,
                         help="Number of episodes to visualize")
     parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed")
+                        help="Random seed for reproducibility")
+    
+    # Output options
     parser.add_argument("--save_video", action="store_true",
-                        help="Save as video (MP4)")
+                        help="Save episodes as MP4 videos")
     parser.add_argument("--save_gif", action="store_true",
-                        help="Save as GIF")
+                        help="Save episodes as GIF animations")
     parser.add_argument("--save_frames", action="store_true",
                         help="Save individual frames as PNG")
     parser.add_argument("--save_summary", action="store_true", default=True,
-                        help="Save summary image (first/middle/last frame)")
-    parser.add_argument("--fps", type=int, default=10,
-                        help="Frames per second for video")
-    parser.add_argument("--frame_interval", type=int, default=1,
-                        help="Save every N frames (1=all frames)")
+                        help="Save summary images")
     parser.add_argument("--output_dir", type=str, default="visualizations",
                         help="Output directory")
-    parser.add_argument("--show", action="store_true",
-                        help="Show live rendering window")
-    parser.add_argument("--select_best", action="store_true", default=True,
-                        help="Only save episodes with high completion rate")
-    parser.add_argument("--min_completion", type=float, default=0.5,
-                        help="Minimum completion rate to save (with --select_best)")
+    
+    # Video settings
+    parser.add_argument("--fps", type=int, default=10,
+                        help="Frames per second for video/GIF")
+    parser.add_argument("--frame_interval", type=int, default=1,
+                        help="Capture every N steps (1=all)")
+    
+    # Filtering
+    parser.add_argument("--min_completion", type=float, default=0.0,
+                        help="Minimum completion rate to save (0.0-1.0)")
+    parser.add_argument("--max_attempts", type=int, default=50,
+                        help="Maximum attempts to find good episodes")
+    
+    # Advanced
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Custom checkpoint path")
     
     args = parser.parse_args()
     
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = os.path.join(args.output_dir, f"{args.env}_{timestamp}")
+    save_dir = os.path.join(args.output_dir, f"{args.agent}_{args.env}_{timestamp}")
     os.makedirs(save_dir, exist_ok=True)
-    print(f"Output directory: {save_dir}")
+    
+    print("=" * 60)
+    print("FLATLAND VISUALIZATION")
+    print("=" * 60)
+    print(f"Agent: {args.agent}")
+    print(f"Environment: {args.env}")
+    print(f"Episodes: {args.episodes}")
+    print(f"Output: {save_dir}")
+    print("=" * 60)
     
     # Load configurations
     with open("parameters/setup.json", "r") as f:
@@ -309,148 +563,133 @@ def main():
         env_configs = json.load(f)
     
     if args.env not in env_configs:
-        print(f"Error: Environment '{args.env}' not found in environments.json")
+        print(f"\nERROR: Environment '{args.env}' not found!")
         print(f"Available: {list(env_configs.keys())}")
         return
     
     env_config = env_configs[args.env]
-    print(f"\nEnvironment: {args.env}")
+    print(f"\nEnvironment config:")
     print(f"  Agents: {env_config['n_agents']}")
+    print(f"  Size: {env_config['x_dim']}x{env_config['y_dim']}")
     print(f"  Cities: {env_config['n_cities']}")
-    print(f"  Map size: {env_config['x_dim']}x{env_config['y_dim']}")
     
-    # Create observation wrapper
-    obs_params = setup['obs']
+    # Detect checkpoint state size
+    checkpoint_path = args.checkpoint or get_checkpoint_path(args.agent, setup['sys'].get('base_dir', ''))
+    checkpoint_state_size = get_checkpoint_state_size(checkpoint_path)
     
-    # Create predictor if specified
-    predictor = None
-    if setup['sys'].get('predictor_class'):
-        predictor_class = getattr(predictor_classes, setup['sys']['predictor_class'])
-        predictor = predictor_class(obs_params)
+    print(f"\nCheckpoint: {checkpoint_path}")
+    if checkpoint_state_size:
+        print(f"  State size: {checkpoint_state_size}")
+    else:
+        print(f"  WARNING: Could not detect state size")
     
-    obs_class = getattr(obs_classes, setup['sys']['obs_class'])
-    obs_wrapper = obs_class(obs_params, predictor)
+    # Create observation manager
+    print(f"\nInitializing observations...")
+    obs_manager = ObservationManager(setup, checkpoint_state_size)
     
     # Create environment
-    env = create_environment(env_config, obs_wrapper.builder, seed=args.seed)
-    
-    # Calculate state size
-    state_size = obs_wrapper.get_state_size() + 3  # +3 for global features
-    action_size = 5
+    env = create_environment(env_config, obs_manager.builder, seed=args.seed)
     
     # Calculate max steps
     max_steps = int(4 * 2 * (env_config['x_dim'] + env_config['y_dim'] + 
                              env_config['n_agents'] / env_config['n_cities']))
     
-    # Load trained agent
-    print(f"\nLoading agent: {args.agent}")
+    # Load agent
+    print(f"\nLoading agent...")
     agent = load_agent(
         args.agent,
-        state_size,
-        action_size,
+        obs_manager.state_size,
         setup['trn'],
-        base_dir=setup['sys']['base_dir']
+        setup['sys'].get('base_dir', ''),
+        checkpoint_path
     )
-    print(f"Agent loaded successfully")
     
-    # Create renderer
-    renderer = RenderTool(env, gl="PILSVG")
-    
-    # Create deadlock detector
+    # Create components
     deadlock_detector = DeadlocksDetector()
     
-    # Patch obs_wrapper to work without env_handler
-    class FakeEnvHandler:
-        def __init__(self, env, config):
-            self.env = env
-            self.x_dim = config['x_dim']
-            self.y_dim = config['y_dim']
-        def get_num_agents(self):
-            return self.env.get_num_agents()
-    
-    fake_handler = FakeEnvHandler(env, env_config)
-    obs_wrapper.env = fake_handler
-    
-    # Override normalize method to handle missing env_handler
-    original_normalize = obs_wrapper.normalize
-    def patched_normalize(observation, env_handler, agent_handle):
-        return original_normalize(observation, fake_handler, agent_handle)
-    obs_wrapper.normalize = patched_normalize
-    
     # Run episodes
-    print(f"\nRunning {args.episodes} episodes...")
+    print(f"\n{'=' * 60}")
+    print("RUNNING EPISODES")
+    print('=' * 60)
     
     all_metrics = []
     saved_count = 0
-    episode_idx = 0
-    attempts = 0
-    max_attempts = args.episodes * 10  # Prevent infinite loop
+    attempt = 0
     
-    while saved_count < args.episodes and attempts < max_attempts:
-        attempts += 1
+    while saved_count < args.episodes and attempt < args.max_attempts:
+        attempt += 1
+        current_seed = args.seed + attempt
         
-        # Use different seed for each episode
-        current_seed = args.seed + attempts
-        env = create_environment(env_config, obs_wrapper.builder, seed=current_seed)
+        # Create fresh environment for this episode
+        env = create_environment(env_config, obs_manager.builder, seed=current_seed)
         renderer = RenderTool(env, gl="PILSVG")
-        fake_handler.env = env
         
-        print(f"\n--- Episode {saved_count + 1}/{args.episodes} (attempt {attempts}) ---")
+        print(f"\nEpisode {saved_count + 1}/{args.episodes} (attempt {attempt}, seed={current_seed})")
         
-        frames, metrics = run_episode_with_rendering(
-            env, agent, obs_wrapper, renderer, deadlock_detector,
-            max_steps, save_dir, saved_count,
-            save_frames=args.save_frames,
-            frame_interval=args.frame_interval
+        # Run episode
+        frames, metrics = run_episode(
+            env, agent, obs_manager, renderer, deadlock_detector,
+            max_steps, capture_frames=True, frame_interval=args.frame_interval
         )
         
         print(f"  Completion: {metrics['completion_rate']*100:.1f}% ({metrics['completed']}/{metrics['total_agents']})")
-        print(f"  Deadlocks: {metrics['deadlock_rate']*100:.1f}%")
-        print(f"  Steps: {metrics['steps']}")
-        print(f"  Frames captured: {len(frames)}")
+        print(f"  Deadlocks: {metrics['deadlocks']}")
+        print(f"  Steps: {metrics['steps']}/{max_steps}")
+        print(f"  Frames: {len(frames)}")
         
-        # Check if we should save this episode
-        if args.select_best and metrics['completion_rate'] < args.min_completion:
-            print(f"  Skipping (completion < {args.min_completion*100:.0f}%)")
+        # Check minimum completion
+        if metrics['completion_rate'] < args.min_completion:
+            print(f"  SKIPPED (completion < {args.min_completion*100:.0f}%)")
             continue
         
-        all_metrics.append(metrics)
-        
-        # Save video
+        # Save outputs
         if args.save_video and frames:
             video_path = os.path.join(save_dir, f"episode_{saved_count:03d}.mp4")
             save_video(frames, video_path, fps=args.fps)
         
-        # Save GIF
         if args.save_gif and frames:
             gif_path = os.path.join(save_dir, f"episode_{saved_count:03d}.gif")
             save_video(frames, gif_path, fps=args.fps)
         
-        # Save summary
-        if args.save_summary and frames:
-            create_visualization_summary(frames, metrics, save_dir, saved_count)
+        if args.save_frames and frames:
+            save_frames_to_disk(frames, save_dir, saved_count)
         
+        if args.save_summary and frames:
+            summary_path = os.path.join(save_dir, f"summary_{saved_count:03d}.png")
+            create_summary_image(frames, metrics, summary_path)
+        
+        all_metrics.append(metrics)
         saved_count += 1
     
-    # Print overall statistics
-    print("\n" + "="*50)
-    print("VISUALIZATION COMPLETE")
-    print("="*50)
-    print(f"Episodes saved: {saved_count}")
+    # Summary
+    print(f"\n{'=' * 60}")
+    print("COMPLETE")
+    print('=' * 60)
+    print(f"Episodes saved: {saved_count}/{args.episodes}")
+    
     if all_metrics:
         avg_completion = np.mean([m['completion_rate'] for m in all_metrics])
-        avg_deadlock = np.mean([m['deadlock_rate'] for m in all_metrics])
+        avg_deadlocks = np.mean([m['deadlock_rate'] for m in all_metrics])
+        avg_steps = np.mean([m['steps'] for m in all_metrics])
+        
         print(f"Average completion: {avg_completion*100:.1f}%")
-        print(f"Average deadlocks: {avg_deadlock*100:.1f}%")
+        print(f"Average deadlocks: {avg_deadlocks*100:.1f}%")
+        print(f"Average steps: {avg_steps:.1f}")
+    
     print(f"Output directory: {save_dir}")
     
-    # Save metrics to JSON
+    # Save metrics
     metrics_path = os.path.join(save_dir, "metrics.json")
     with open(metrics_path, "w") as f:
         json.dump({
-            "environment": args.env,
             "agent": args.agent,
-            "episodes": all_metrics
+            "environment": args.env,
+            "episodes": all_metrics,
+            "settings": {
+                "seed": args.seed,
+                "fps": args.fps,
+                "frame_interval": args.frame_interval,
+            }
         }, f, indent=2)
     print(f"Metrics saved: {metrics_path}")
 

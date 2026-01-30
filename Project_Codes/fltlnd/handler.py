@@ -83,16 +83,16 @@ class ExcHandler:
         #   Set self._use_action_masking = False
         # ============================================================
         
-        # RECOMMENDED: Use minimal masking (collision avoidance only)
-        self._action_masker = MinimalActionMasker()
+        # # RECOMMENDED: Use minimal masking (collision avoidance only)
+        # self._action_masker = MinimalActionMasker()
         
-        # Alternative: Full priority-based masking (may cause issues)
-        # self._action_masker = ActionMasker(
-        #     conflict_radius=2,  # Reduced from 3
-        #     enable_priority_yielding=True,
-        #     enable_collision_avoidance=True,
-        #     conservative_mode=False
-        # )
+        # # Alternative: Full priority-based masking (may cause issues)
+        self._action_masker = ActionMasker(
+            conflict_radius=5,  
+            enable_priority_yielding=True,
+            enable_collision_avoidance=True,
+            conservative_mode=False
+        )
         
         # Flag to enable/disable action masking
         self._use_action_masking = True
@@ -384,7 +384,7 @@ class ExcHandler:
                                     if agent > other_agent:
                                         # This agent should yield
                                         # If we stopped (action 4) or moved aside, reward
-                                        if action_dict[agent] == 2:  # STOP_MOVING
+                                        if action_dict[agent] == 4:  # STOP_MOVING
                                             shaped_reward += 0.1  # Reward for yielding
                                         # If other agent is moving toward target, extra reward
                                         if other_agent in self._prev_distances:

@@ -5,31 +5,31 @@
         "obs_class": "EnhancedTreeObs",
         "agent_class": "DDDQNAgent",
         "log_class": "WandBLogger",
-        "memory_class": "ReplayBuffer",
+        "memory_class": "PrioritizedBuffer",
         "predictor_class": "StochasticPathPredictor"
     },
     "obs": {
         "tree_depth": 3,
         "predictor_depth": 50,
-        "radius": 10
+        "radius": 30
     },
     "trn": {
-        "memory_size": 100000,
-        "batch_size": 128,
+        "memory_size": 150000,
+        "batch_size": 256,
         "update_every": 4,
-        "learning_rate": 5e-05,
-        "tau": 0.001,
+        "learning_rate": 3e-05,
+        "tau": 0.0005,
         "gamma": 0.99,
-        "buffer_min_size": 10000,
+        "buffer_min_size": 15000,
         "hidden_sizes": [
             256,
             256
         ],
-        "exp_start": 1.0,
+        "exp_start": 0.5,
         "exp_end": 0.05,
         "exp_decay": 0.999,
         "checkpoint_freq": 100,
-        "target_update": 1000,
+        "target_update": 2000,
         "soft_update": true,
         "noisy_net": false,
         "env": "phase3_five_agents"

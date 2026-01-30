@@ -1,13 +1,3 @@
-"""
-Improved Action Masking for Multi-Agent Coordination in Flatland
-
-Key improvement over v1: Only mask forward movement when the agent has
-an alternative (can take a different route or wait productively).
-Don't mask if it would cause the agent to block the track forever.
-
-Place this file in your fltlnd/ folder as action_masking.py (replace the old one)
-"""
-
 import numpy as np
 from flatland.envs.agent_utils import RailAgentStatus
 
@@ -15,26 +5,34 @@ from flatland.envs.agent_utils import RailAgentStatus
 class ActionMasker:
     """
     Improved action masker that:
-    1. Only masks when alternatives exist
-    2. Considers track topology before forcing yields
-    3. Avoids creating livelock situations
+    1. Traces along rails to detect true conflicts (not just row/column alignment)
+    2. Only masks when it makes sense (considers track topology)
+    3. Uses sidings/switches for conflict resolution
+    4. Avoids creating permanent deadlocks
     """
     
     DIRECTIONS = [(-1, 0), (0, 1), (1, 0), (0, -1)]
     
-    def __init__(self, conflict_radius=2, enable_priority_yielding=True, 
+    def __init__(self, conflict_radius=5, enable_priority_yielding=True, 
                  enable_collision_avoidance=True, conservative_mode=False):
         """
         Args:
-            conflict_radius: Distance to check for conflicts (reduced from 3 to 2)
+            conflict_radius: Distance along track to check for conflicts (increased to 5)
             enable_priority_yielding: If True, lower priority yields to higher
             enable_collision_avoidance: If True, prevent moving into occupied cells
-            conservative_mode: If True, be more aggressive with masking (not recommended)
+            conservative_mode: If True, be more aggressive with masking
         """
         self.conflict_radius = conflict_radius
         self.enable_priority_yielding = enable_priority_yielding
         self.enable_collision_avoidance = enable_collision_avoidance
         self.conservative_mode = conservative_mode
+        
+        # Cache for rail tracing results (reset each step)
+        self._trace_cache = {}
+    
+    def reset_cache(self):
+        """Call this at the start of each environment step."""
+        self._trace_cache = {}
     
     def get_action_mask(self, env, agent_handle):
         """Get valid action mask for a specific agent."""
@@ -43,13 +41,10 @@ class ActionMasker:
         
         # Handle non-active agents
         if agent.status == RailAgentStatus.READY_TO_DEPART:
-            # Can enter (forward) or wait (do nothing)
-            # Check if entry cell is blocked
             if self._is_spawn_blocked(env, agent):
-                mask = np.array([1, 0, 0, 0, 1], dtype=np.float32)  # Wait or stop
+                return np.array([1, 0, 0, 0, 1], dtype=np.float32)  # Wait or stop
             else:
-                mask = np.array([1, 0, 1, 0, 0], dtype=np.float32)  # Can enter
-            return mask
+                return np.array([1, 0, 1, 0, 0], dtype=np.float32)  # Can enter
         
         if agent.status in [RailAgentStatus.DONE, RailAgentStatus.DONE_REMOVED]:
             return np.array([1, 0, 0, 0, 0], dtype=np.float32)
@@ -78,21 +73,19 @@ class ActionMasker:
             collision_mask = self._get_collision_mask(env, agent)
             mask = mask * collision_mask
         
-        # Priority-based yielding - but ONLY if agent has alternatives
+        # Priority-based yielding with improved logic
         if self.enable_priority_yielding:
-            priority_mask = self._get_smart_priority_mask(
+            priority_mask = self._get_improved_priority_mask(
                 env, agent_handle, agent, valid_transitions, n_movement_options
             )
             mask = mask * priority_mask
         
         # Ensure at least one action is valid
         if mask.sum() == 0:
-            # If truly stuck, allow stopping
+            # Truly stuck - only allow stopping
             mask[4] = 1.0
-            # But also allow forward if it was only masked due to priority
-            # (better to cause conflict than permanent deadlock)
-            if valid_transitions['forward']:
-                mask[2] = 0.5  # Lower weight but still allowed
+            # DO NOT allow forward with reduced weight - this defeats the purpose
+            # If we're in a deadlock, the deadlock detector will handle it
         
         return mask
     
@@ -156,95 +149,125 @@ class ActionMasker:
         
         return mask
     
-    def _get_smart_priority_mask(self, env, agent_handle, agent, valid_transitions, n_movement_options):
+    def _trace_track_forward(self, env, start_pos, start_dir, max_distance):
         """
-        Smart priority masking that only forces yields when:
-        1. There's a genuine conflict (agents approaching each other)
-        2. The yielding agent has somewhere else to go OR
-        3. The higher-priority agent can actually pass if we yield
+        Trace along the rail track from a starting position/direction.
+        Returns list of (position, direction) tuples along the track.
+        
+        This properly follows the rail topology instead of just checking
+        row/column alignment.
         """
-        mask = np.ones(5, dtype=np.float32)
+        cache_key = (start_pos, start_dir, max_distance)
+        if cache_key in self._trace_cache:
+            return self._trace_cache[cache_key]
         
-        if agent.position is None or agent.direction is None:
-            return mask
+        path = []
+        current_pos = start_pos
+        current_dir = start_dir
         
-        # Find higher-priority agents nearby
-        for other in env.agents:
-            if other.handle >= agent_handle:
-                continue
-            if other.position is None or other.status != RailAgentStatus.ACTIVE:
-                continue
+        for _ in range(max_distance):
+            # Get next position
+            next_pos = self._get_next_position(current_pos, current_dir)
             
-            dist = (abs(agent.position[0] - other.position[0]) + 
-                   abs(agent.position[1] - other.position[1]))
+            # Check if valid position on map
+            if not self._is_valid_position(env, next_pos):
+                break
             
-            if dist > self.conflict_radius:
-                continue
+            # Check if there's a rail connection
+            try:
+                transitions = env.rail.get_transitions(current_pos[0], current_pos[1], current_dir)
+                if transitions[current_dir] != 1:
+                    break
+            except:
+                break
             
-            # Check if this is actually a conflict situation
-            conflict_type = self._classify_conflict(agent, other, env)
+            path.append((next_pos, current_dir))
             
-            if conflict_type == 'none':
-                continue
+            # Determine next direction (follow the rail)
+            # Get transitions at new position from opposite direction (we're entering)
+            try:
+                entering_dir = (current_dir + 2) % 4  # Direction we're coming from
+                # Find where we can go from here
+                next_dir = self._get_continuation_direction(env, next_pos, current_dir)
+                if next_dir is None:
+                    break
+                current_dir = next_dir
+            except:
+                break
             
-            if conflict_type == 'head_on':
-                # Head-on: only yield if we have alternative OR are at a switch
-                if n_movement_options > 1:
-                    # We can take another route
-                    mask[2] = 0
-                elif self._is_at_switch(env, agent):
-                    # We're at a switch, can potentially reverse or wait for path
-                    mask[2] = 0
-                # else: don't mask - forcing stop would create permanent deadlock
+            current_pos = next_pos
+        
+        self._trace_cache[cache_key] = path
+        return path
+    
+    def _get_continuation_direction(self, env, position, incoming_dir):
+        """
+        Get the direction an agent would continue in after entering a cell.
+        For straight track: continue in same direction
+        For curves: follow the curve
+        For switches: prefer straight, then check alternatives
+        """
+        try:
+            # Check all possible outgoing directions
+            possible_dirs = []
+            for out_dir in range(4):
+                if out_dir == (incoming_dir + 2) % 4:
+                    continue  # Skip reverse direction
+                transitions = env.rail.get_transitions(position[0], position[1], incoming_dir)
+                if transitions[out_dir] == 1:
+                    possible_dirs.append(out_dir)
+            
+            if not possible_dirs:
+                return None
+            
+            # Prefer continuing straight if possible
+            if incoming_dir in possible_dirs:
+                return incoming_dir
+            
+            # Otherwise take first available direction
+            return possible_dirs[0]
+        except:
+            return None
+    
+    def _is_valid_position(self, env, position):
+        """Check if position is within map bounds."""
+        try:
+            return (0 <= position[0] < env.rail.height and 
+                    0 <= position[1] < env.rail.width)
+        except:
+            return False
+    
+    def _find_agents_on_track(self, env, agent, path):
+        """
+        Find other agents along the traced track path.
+        Returns list of (other_agent, distance, is_head_on) tuples.
+        """
+        found_agents = []
+        agent_handle = agent.handle
+        
+        for dist, (pos, direction) in enumerate(path, 1):
+            for other in env.agents:
+                if other.handle == agent_handle:
+                    continue
+                if other.position != pos:
+                    continue
+                if other.status != RailAgentStatus.ACTIVE:
+                    continue
                 
-            elif conflict_type == 'same_target':
-                # Both going to same cell - lower priority should wait
-                if n_movement_options > 1:
-                    mask[2] = 0
-                # else: let them race (collision avoidance will handle it)
+                # Check if head-on (facing opposite direction)
+                is_head_on = False
+                if other.direction is not None:
+                    is_head_on = (other.direction == (direction + 2) % 4)
                 
-            elif conflict_type == 'blocking_path':
-                # We might block higher priority's path
-                # Only yield if it actually helps
-                if self._yielding_helps(env, agent, other):
-                    if n_movement_options > 1 or self._can_wait_productively(env, agent, other):
-                        mask[2] = 0
+                found_agents.append((other, dist, is_head_on))
         
-        return mask
+        return found_agents
     
-    def _classify_conflict(self, agent, other, env):
-        """Classify the type of conflict between two agents."""
-        if agent.direction is None or other.direction is None:
-            return 'none'
-        
-        # Head-on: facing opposite directions on same track
-        if (agent.direction + 2) % 4 == other.direction:
-            # Check if they're on the same line
-            if self._on_same_track(agent, other):
-                return 'head_on'
-        
-        # Same target: both moving to the same cell
-        agent_next = self._get_next_position(agent.position, agent.direction)
-        other_next = self._get_next_position(other.position, other.direction)
-        if agent_next == other_next:
-            return 'same_target'
-        
-        # Check if agent would block other's path
-        if agent_next == other.position:
-            return 'blocking_path'
-        
-        return 'none'
-    
-    def _on_same_track(self, agent, other):
-        """Check if two agents are on the same track segment."""
-        # Simplified check: are they aligned horizontally or vertically?
-        if agent.direction in [0, 2]:  # N-S
-            return agent.position[1] == other.position[1]
-        else:  # E-W
-            return agent.position[0] == other.position[0]
-    
-    def _is_at_switch(self, env, agent):
-        """Check if agent is at a switch (junction with multiple options)."""
+    def _agent_can_yield(self, env, agent):
+        """
+        Check if agent is at a position where it can yield (take alternate route).
+        This includes switches and sidings.
+        """
         if agent.position is None or agent.direction is None:
             return False
         
@@ -252,43 +275,150 @@ class ActionMasker:
             transitions = env.rail.get_transitions(
                 agent.position[0], agent.position[1], agent.direction
             )
-            return sum(transitions) > 1
+            n_options = sum(transitions)
+            return n_options > 1
         except:
             return False
     
-    def _yielding_helps(self, env, agent, other):
-        """Check if this agent yielding would actually help the other agent."""
-        # If other agent's next move is blocked by this agent, yielding helps
-        if other.direction is None:
-            return False
+    def _get_improved_priority_mask(self, env, agent_handle, agent, valid_transitions, n_movement_options):
+        """
+        Improved priority masking that:
+        1. Traces along the rail to find true conflicts
+        2. Works even on straight track by detecting upcoming conflicts
+        3. Uses siding detection for smart yielding decisions
+        4. Handles mutual deadlocks properly
+        """
+        mask = np.ones(5, dtype=np.float32)
         
-        other_next = self._get_next_position(other.position, other.direction)
-        return other_next == agent.position
+        if agent.position is None or agent.direction is None:
+            return mask
+        
+        # Trace forward along the track
+        forward_path = self._trace_track_forward(
+            env, agent.position, agent.direction, self.conflict_radius
+        )
+        
+        # Find agents along our path
+        agents_ahead = self._find_agents_on_track(env, agent, forward_path)
+        
+        # Check if this agent can yield (is at a switch/siding)
+        i_can_yield = self._agent_can_yield(env, agent) or n_movement_options > 1
+        
+        for other, dist, is_head_on in agents_ahead:
+            # Skip lower-priority agents (they should yield to us)
+            if other.handle > agent_handle:
+                continue
+            
+            # Higher-priority agent found ahead
+            other_can_yield = self._agent_can_yield(env, other)
+            
+            if is_head_on:
+                # HEAD-ON CONFLICT
+                # Determine who should yield based on:
+                # 1. Priority (lower handle = higher priority)
+                # 2. Ability to yield (who is at a switch)
+                # 3. Distance to target (who is closer to finishing)
+                
+                should_i_yield = self._should_yield_in_conflict(
+                    agent, other, i_can_yield, other_can_yield
+                )
+                
+                if should_i_yield:
+                    if i_can_yield:
+                        # I can take alternate route - mask forward
+                        mask[2] = 0
+                    elif dist <= 2:
+                        # Very close and I can't yield - must stop
+                        # This prevents collision but may cause deadlock
+                        # which is better than crash
+                        mask[2] = 0
+                    # else: I can't yield and they're not too close - keep moving
+                    # hoping they find a siding first
+                    
+            else:
+                # SAME DIRECTION or CONVERGING
+                # If higher priority agent is ahead going same way, we might
+                # need to slow down to avoid rear-ending them
+                if dist <= 2:
+                    # Too close - consider stopping to avoid collision
+                    if n_movement_options > 1:
+                        # We have alternatives
+                        mask[2] = 0
+        
+        # Check for agents entering from sides (same target cell)
+        self._check_lateral_conflicts(env, agent_handle, agent, mask, valid_transitions)
+        
+        return mask
     
-    def _can_wait_productively(self, env, agent, other):
-        """Check if waiting would eventually resolve (other will pass by)."""
-        # Heuristic: if other agent is moving toward their target and we're not
-        # directly in their path, waiting might help
-        if other.target is None or agent.position is None:
-            return False
+    def _should_yield_in_conflict(self, agent, other, i_can_yield, other_can_yield):
+        """
+        Determine if this agent should yield in a conflict with 'other'.
         
-        # Is other agent making progress?
-        other_dist_to_target = (abs(other.position[0] - other.target[0]) + 
-                                abs(other.position[1] - other.target[1]))
+        Priority rules:
+        1. Agent handle (lower = higher priority) - other has priority over agent
+        2. If one can yield and other can't, yielder yields
+        3. If both can/can't yield, lower priority yields
+        """
+        # other.handle < agent.handle, so other has priority
         
-        # Simple heuristic: if they're close to target, let them finish
-        if other_dist_to_target < 5:
+        # Case 1: Only I can yield - I should yield
+        if i_can_yield and not other_can_yield:
             return True
         
-        return False
+        # Case 2: Only they can yield - they should yield (I don't)
+        if not i_can_yield and other_can_yield:
+            return False
+        
+        # Case 3: Both or neither can yield - lower priority (higher handle) yields
+        # Since other.handle < agent.handle, I am lower priority, so I yield
+        return True
+    
+    def _check_lateral_conflicts(self, env, agent_handle, agent, mask, valid_transitions):
+        """
+        Check for conflicts where two agents would move into the same cell.
+        """
+        if agent.position is None or agent.direction is None:
+            return
+        
+        direction = agent.direction
+        my_next_positions = {}
+        
+        # Calculate where each of my actions would take me
+        if valid_transitions['left']:
+            left_dir = (direction - 1) % 4
+            my_next_positions[1] = self._get_next_position(agent.position, left_dir)
+        if valid_transitions['forward']:
+            my_next_positions[2] = self._get_next_position(agent.position, direction)
+        if valid_transitions['right']:
+            right_dir = (direction + 1) % 4
+            my_next_positions[3] = self._get_next_position(agent.position, right_dir)
+        
+        # Check if any higher-priority agent would move into the same cell
+        for other in env.agents:
+            if other.handle >= agent_handle:
+                continue
+            if other.position is None or other.direction is None:
+                continue
+            if other.status != RailAgentStatus.ACTIVE:
+                continue
+            
+            # Where would the other agent go?
+            other_next = self._get_next_position(other.position, other.direction)
+            
+            # Check if any of my moves would conflict
+            for action, my_next in my_next_positions.items():
+                if my_next == other_next:
+                    # Conflict! Higher priority gets the cell, I should wait
+                    mask[action] = 0
     
     def get_all_action_masks(self, env):
         """Get action masks for all agents."""
+        # Reset trace cache at start of each step
+        self.reset_cache()
         return {agent.handle: self.get_action_mask(env, agent.handle) 
                 for agent in env.agents}
 
 
-# Also provide a minimal masking option that ONLY does collision avoidance
 class MinimalActionMasker:
     """
     Minimal masker that only prevents immediate collisions.
@@ -306,7 +436,6 @@ class MinimalActionMasker:
         agent = env.agents[agent_handle]
         
         if agent.status == RailAgentStatus.READY_TO_DEPART:
-            # Check spawn blocked
             for other in env.agents:
                 if other.handle != agent_handle and other.position == agent.initial_position:
                     return np.array([1, 0, 0, 0, 1], dtype=np.float32)
@@ -318,7 +447,6 @@ class MinimalActionMasker:
         if agent.position is None or agent.direction is None:
             return mask
         
-        # Get rail topology
         try:
             transitions = env.rail.get_transitions(
                 agent.position[0], agent.position[1], agent.direction
@@ -337,7 +465,6 @@ class MinimalActionMasker:
         if transitions[right_dir] != 1:
             mask[3] = 0
         
-        # Only collision avoidance - prevent moving into occupied cell
         action_directions = {
             1: left_dir,
             2: direction,
