@@ -3,7 +3,7 @@
         "seed": 42,
         "base_dir": "",
         "obs_class": "EnhancedTreeObs",
-        "agent_class": "DDDQNAgent",
+        "agent_class": "DQNAgent",
         "log_class": "WandBLogger",
         "memory_class": "PrioritizedBuffer",
         "predictor_class": "StochasticPathPredictor"
@@ -25,9 +25,9 @@
             256,
             256
         ],
-        "exp_start": 0.5,
+        "exp_start": 1.0,
         "exp_end": 0.05,
-        "exp_decay": 0.999,
+        "exp_decay": 0.9993,
         "checkpoint_freq": 100,
         "target_update": 2000,
         "soft_update": true,

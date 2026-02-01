@@ -547,55 +547,186 @@ def plot_summary_dashboard(all_data: dict, output_dir: str):
     if not summaries:
         return
     
-    # Create summary bar chart
+    # =========================================================================
+    # SORT BY AGENT TYPE FIRST, THEN BY ENVIRONMENT
+    # =========================================================================
+    agent_order = ["dqn-agent", "double-dqn-agent", "dueling-dqn-agent", "d3qn-agent"]
+    env_order = ["phase0_single", "phase1_two_agents", "phase2_three_agents", 
+                 "phase3_five_agents", "phase4_seven_agents"]
+    
+    def sort_key(s):
+        agent_idx = agent_order.index(s["agent"]) if s["agent"] in agent_order else 99
+        env_idx = env_order.index(s["env"]) if s["env"] in env_order else 99
+        return (agent_idx, env_idx)
+    
+    summaries = sorted(summaries, key=sort_key)
+    # =========================================================================
+    
     summary_df = pd.DataFrame(summaries)
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-    fig.suptitle("Training Summary (Last 100 Episodes)", fontsize=14)
+    # =========================================================================
+    # CREATE SEPARATE FIGURE FOR EACH METRIC (Much clearer!)
+    # =========================================================================
+    n_runs = len(summaries)
     
-    x_labels = [f"{s['agent']}\n{s['env']}" for s in summaries]
+    # Assign colors by agent type
+    agent_colors = {
+        "dqn-agent": "#1f77b4",        # Blue
+        "double-dqn-agent": "#ff7f0e", # Orange
+        "dueling-dqn-agent": "#2ca02c", # Green
+        "d3qn-agent": "#d62728",       # Red
+    }
+    bar_colors = [agent_colors.get(s["agent"], "gray") for s in summaries]
+    
+    # Short labels
+    x_labels = [f"{s['env'].replace('phase', 'P').replace('_agents', '').replace('_single', '').replace('_two', '2').replace('_three', '3').replace('_five', '5').replace('_seven', '7')}" 
+                for s in summaries]
+    
+    # =========================================================================
+    # PLOT 1: Completion Rate
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(max(12, n_runs * 0.8), 7))
+    
     x = np.arange(len(summaries))
+    bars = ax.bar(x, summary_df["completion_rate"], color=bar_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
     
-    # Completion Rate
-    ax = axes[0]
-    if "completion_rate" in summary_df.columns:
-        bars = ax.bar(x, summary_df["completion_rate"], color='green', alpha=0.7)
-        ax.axhline(y=0.8, color='red', linestyle='--', alpha=0.5, label='80% target')
-        ax.set_ylabel("Completion Rate")
-        ax.set_title("Completion Rate")
-        ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
-        ax.set_ylim([0, 1])
-        ax.legend()
+    ax.axhline(y=0.8, color='red', linestyle='--', linewidth=2, label='80% target')
+    ax.set_ylabel("Completion Rate", fontsize=14)
+    ax.set_title("Completion Rate by Agent & Environment (Last 100 Episodes)", fontsize=16, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
+    ax.set_ylim([0, 1.15])
+    ax.grid(True, alpha=0.3, axis='y')
     
-    # Deadlock Rate
-    ax = axes[1]
-    if "deadlock_rate" in summary_df.columns:
-        bars = ax.bar(x, summary_df["deadlock_rate"], color='red', alpha=0.7)
-        ax.axhline(y=0.2, color='green', linestyle='--', alpha=0.5, label='20% target')
-        ax.set_ylabel("Deadlock Rate")
-        ax.set_title("Deadlock Rate")
-        ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
-        ax.set_ylim([0, 1])
-        ax.legend()
+    # Value labels
+    for bar, val in zip(bars, summary_df["completion_rate"]):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, 
+               f'{val:.0%}', ha='center', va='bottom', fontsize=9, fontweight='bold')
     
-    # Score
-    ax = axes[2]
-    if "score" in summary_df.columns:
-        bars = ax.bar(x, summary_df["score"], color='blue', alpha=0.7)
-        ax.set_ylabel("Average Score")
-        ax.set_title("Score")
-        ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
+    # Add agent group separators and labels
+    current_agent = None
+    group_starts = []
+    for i, s in enumerate(summaries):
+        if s["agent"] != current_agent:
+            if current_agent is not None:
+                ax.axvline(x=i - 0.5, color='black', linestyle='-', linewidth=1.5, alpha=0.5)
+            group_starts.append((i, s["agent"]))
+            current_agent = s["agent"]
+    
+    # Add agent name labels at top
+    for i, (start_idx, agent_name) in enumerate(group_starts):
+        # Find end of this group
+        if i + 1 < len(group_starts):
+            end_idx = group_starts[i + 1][0] - 1
+        else:
+            end_idx = len(summaries) - 1
+        
+        mid_x = (start_idx + end_idx) / 2
+        display_name = agent_name.replace("-agent", "").replace("-", " ").upper()
+        ax.text(mid_x, 1.08, display_name, ha='center', va='bottom', fontsize=11, 
+               fontweight='bold', color=agent_colors.get(agent_name, "black"))
+    
+    # Legend for target line
+    ax.legend(loc='lower right', fontsize=10)
     
     plt.tight_layout()
-    
-    filename = "summary_dashboard.png"
-    plt.savefig(os.path.join(output_dir, filename), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "summary_completion_rate.png"), dpi=150, bbox_inches='tight')
     plt.close()
+    print(f"  Saved: summary_completion_rate.png")
     
-    print(f"  Saved: {filename}")
+    # =========================================================================
+    # PLOT 2: Deadlock Rate
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(max(12, n_runs * 0.8), 7))
+    
+    bars = ax.bar(x, summary_df["deadlock_rate"], color=bar_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    
+    ax.axhline(y=0.2, color='green', linestyle='--', linewidth=2, label='20% target')
+    ax.set_ylabel("Deadlock Rate", fontsize=14)
+    ax.set_title("Deadlock Rate by Agent & Environment (Last 100 Episodes)", fontsize=16, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
+    ax.set_ylim([0, max(summary_df["deadlock_rate"].max() * 1.2, 0.5)])
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Value labels
+    for bar, val in zip(bars, summary_df["deadlock_rate"]):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+               f'{val:.0%}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    
+    # Add agent group separators
+    current_agent = None
+    for i, s in enumerate(summaries):
+        if s["agent"] != current_agent:
+            if current_agent is not None:
+                ax.axvline(x=i - 0.5, color='black', linestyle='-', linewidth=1.5, alpha=0.5)
+            current_agent = s["agent"]
+    
+    # Agent labels at top
+    for i, (start_idx, agent_name) in enumerate(group_starts):
+        if i + 1 < len(group_starts):
+            end_idx = group_starts[i + 1][0] - 1
+        else:
+            end_idx = len(summaries) - 1
+        
+        mid_x = (start_idx + end_idx) / 2
+        display_name = agent_name.replace("-agent", "").replace("-", " ").upper()
+        y_pos = max(summary_df["deadlock_rate"].max() * 1.15, 0.45)
+        ax.text(mid_x, y_pos, display_name, ha='center', va='bottom', fontsize=11, 
+               fontweight='bold', color=agent_colors.get(agent_name, "black"))
+    
+    ax.legend(loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "summary_deadlock_rate.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: summary_deadlock_rate.png")
+    
+    # =========================================================================
+    # PLOT 3: Score
+    # =========================================================================
+    fig, ax = plt.subplots(figsize=(max(12, n_runs * 0.8), 7))
+    
+    bars = ax.bar(x, summary_df["score"], color=bar_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    
+    ax.set_ylabel("Average Score", fontsize=14)
+    ax.set_title("Score by Agent & Environment (Last 100 Episodes)", fontsize=16, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Value labels
+    for bar, val in zip(bars, summary_df["score"]):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005, 
+               f'{val:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    
+    # Add agent group separators
+    current_agent = None
+    for i, s in enumerate(summaries):
+        if s["agent"] != current_agent:
+            if current_agent is not None:
+                ax.axvline(x=i - 0.5, color='black', linestyle='-', linewidth=1.5, alpha=0.5)
+            current_agent = s["agent"]
+    
+    # Agent labels at top
+    max_score = summary_df["score"].max()
+    for i, (start_idx, agent_name) in enumerate(group_starts):
+        if i + 1 < len(group_starts):
+            end_idx = group_starts[i + 1][0] - 1
+        else:
+            end_idx = len(summaries) - 1
+        
+        mid_x = (start_idx + end_idx) / 2
+        display_name = agent_name.replace("-agent", "").replace("-", " ").upper()
+        ax.text(mid_x, max_score * 1.1, display_name, ha='center', va='bottom', fontsize=11, 
+               fontweight='bold', color=agent_colors.get(agent_name, "black"))
+    
+    ax.set_ylim([0, max_score * 1.2])
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "summary_score.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: summary_score.png")
 
 
 # =============================================================================
@@ -696,6 +827,8 @@ def main():
                         help="Directory to save diagnostic plots")
     parser.add_argument("--latest", type=int, default=None,
                         help="Only analyze the N most recent runs")
+    parser.add_argument("--max_episodes", type=int, default=None,
+                        help="Only analyze first N episodes of each run")
     args = parser.parse_args()
     
     # Create output directory
@@ -712,6 +845,12 @@ def main():
     print("Loading training data...")
     all_data = load_all_runs_data(args.log_dir)
     
+    if args.max_episodes:
+        print(f"Limiting analysis to first {args.max_episodes} episodes")
+        for key in all_data:
+            df = all_data[key]["df"]
+            all_data[key]["df"] = df[df["idx"] <= args.max_episodes]
+
     if not all_data:
         print("No training data found!")
         return

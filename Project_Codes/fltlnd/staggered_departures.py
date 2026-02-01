@@ -1,90 +1,136 @@
 """
-Staggered Departures Implementation for Flatland
-This module provides utilities for implementing staggered train departures,
-which is the primary recommended solution for the multi-agent deadlock problem.
+Staggered Departures Module for Flatland Multi-Agent RL
 
-The core insight: When all agents spawn at t=0, they immediately compete for
-limited track resources, causing unavoidable deadlocks. By staggering departures,
-we give each agent time to move before the next one enters.
+This module implements staggered departure scheduling to reduce initial
+track competition and deadlocks in multi-agent railway scenarios.
+
+Key insight: Simultaneous spawning at t=0 causes immediate conflicts.
+Staggering departures gives each agent time to clear initial track segments.
 """
 
+from typing import Dict, Optional, List
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+
+
+# ============================================================
+# INCREASED SPACING VALUES
+# These are tuned to give agents enough separation
+# ============================================================
+RECOMMENDED_SPACINGS = {
+    1: 0,    # Single agent - no spacing needed
+    2: 10,   # Two agents - 10 steps apart (increased from 8)
+    3: 15,   # Three agents - 15 steps apart (increased from 12)
+    5: 25,   # Five agents - 25 steps apart (increased from 15)
+    7: 30,   # Seven agents
+    10: 35,  # Ten agents
+}
+
+
+def get_spacing_for_phase(n_agents: int) -> int:
+    """
+    Get recommended departure spacing based on number of agents.
+    
+    Args:
+        n_agents: Number of agents in the environment
+        
+    Returns:
+        Recommended spacing in steps between departures
+    """
+    if n_agents in RECOMMENDED_SPACINGS:
+        return RECOMMENDED_SPACINGS[n_agents]
+    
+    # For other agent counts, interpolate/extrapolate
+    if n_agents < 2:
+        return 0
+    elif n_agents <= 3:
+        return 12 + (n_agents - 2) * 3
+    elif n_agents <= 5:
+        return 15 + (n_agents - 3) * 5
+    elif n_agents <= 10:
+        return 25 + (n_agents - 5) * 2
+    else:
+        # For very large numbers, use formula
+        return min(40, 25 + (n_agents - 5) * 2)
 
 
 class StaggeredDepartureController:
     """
-    Controls when agents are allowed to depart based on a staggered schedule.
+    Controls staggered departure timing for multi-agent scenarios.
     
-    This controller works by:
-    1. Computing departure times for each agent based on spacing
-    2. Masking out all actions except DO_NOTHING for agents before their departure time
-    3. Optionally providing rewards/penalties related to departure timing
+    This controller determines when each agent is allowed to depart
+    and masks actions to enforce the departure schedule.
     """
     
     def __init__(
         self,
         n_agents: int,
-        departure_spacing: int = 10,
-        spacing_mode: str = 'fixed',
-        random_window: int = 5
+        departure_spacing: int = 15,
+        spacing_mode: str = 'fixed'
     ):
         """
         Initialize the staggered departure controller.
         
         Args:
-            n_agents: Number of agents in the environment
-            departure_spacing: Base time steps between departures
+            n_agents: Total number of agents
+            departure_spacing: Number of steps between departures
             spacing_mode: 'fixed', 'random', or 'adaptive'
-                - 'fixed': Agent i departs at t = i * departure_spacing
-                - 'random': Agent i departs at t = i * departure_spacing + random(0, random_window)
-                - 'adaptive': Spacing based on map size and agent count
-            random_window: For 'random' mode, the window size for randomization
         """
         self.n_agents = n_agents
         self.departure_spacing = departure_spacing
         self.spacing_mode = spacing_mode
-        self.random_window = random_window
         
         # Compute departure times
         self.departure_times = self._compute_departure_times()
         
+        # Track which agents have departed
+        self.has_departed = {i: False for i in range(n_agents)}
+    
     def _compute_departure_times(self) -> Dict[int, int]:
         """Compute departure time for each agent."""
         departure_times = {}
         
         if self.spacing_mode == 'fixed':
+            # Simple linear spacing
             for i in range(self.n_agents):
                 departure_times[i] = i * self.departure_spacing
                 
         elif self.spacing_mode == 'random':
+            # Random spacing within bounds
+            base_times = [i * self.departure_spacing for i in range(self.n_agents)]
+            jitter = self.departure_spacing // 4
             for i in range(self.n_agents):
-                base_time = i * self.departure_spacing
-                random_offset = np.random.randint(0, self.random_window + 1)
-                departure_times[i] = base_time + random_offset
+                departure_times[i] = max(0, base_times[i] + np.random.randint(-jitter, jitter + 1))
                 
         elif self.spacing_mode == 'adaptive':
-            # More agents = more spacing needed
-            adaptive_spacing = max(5, self.departure_spacing * (self.n_agents / 3))
+            # Could be extended to adapt based on environment
             for i in range(self.n_agents):
-                departure_times[i] = int(i * adaptive_spacing)
+                departure_times[i] = i * self.departure_spacing
         
         return departure_times
     
     def reset(self):
-        """Reset departure times (call at start of each episode)."""
-        self.departure_times = self._compute_departure_times()
+        """Reset the controller for a new episode."""
+        self.has_departed = {i: False for i in range(self.n_agents)}
         
-    def can_depart(self, agent_id: int, current_step: int) -> bool:
-        """Check if an agent is allowed to depart at the current step."""
-        return current_step >= self.departure_times.get(agent_id, 0)
+        # Recompute departure times if using random mode
+        if self.spacing_mode == 'random':
+            self.departure_times = self._compute_departure_times()
     
-    def get_departure_mask(self, current_step: int) -> Dict[int, bool]:
-        """Get a mask indicating which agents can depart."""
-        return {
-            agent_id: self.can_depart(agent_id, current_step)
-            for agent_id in range(self.n_agents)
-        }
+    def can_depart(self, agent_handle: int, current_step: int) -> bool:
+        """
+        Check if an agent is allowed to depart at the current step.
+        
+        Args:
+            agent_handle: The agent's handle/ID
+            current_step: Current environment step
+            
+        Returns:
+            True if agent can depart, False otherwise
+        """
+        if agent_handle not in self.departure_times:
+            return True  # Unknown agent - allow departure
+        
+        return current_step >= self.departure_times[agent_handle]
     
     def mask_actions_for_departure(
         self,
@@ -93,126 +139,121 @@ class StaggeredDepartureController:
         agent_states: Dict[int, int]
     ) -> Dict[int, int]:
         """
-        Modify actions to enforce staggered departures.
+        Modify action dictionary to enforce departure schedule.
         
-        Agents that haven't reached their departure time are forced to DO_NOTHING (0).
-        This only applies to agents in READY_TO_DEPART state.
+        Agents that haven't reached their departure time are forced
+        to take DO_NOTHING (action 0) instead of entering the environment.
         
         Args:
-            action_dict: Original action dictionary
+            action_dict: Dictionary mapping agent handles to actions
             current_step: Current environment step
-            agent_states: Dictionary mapping agent_id to RailAgentStatus
+            agent_states: Dictionary mapping agent handles to RailAgentStatus values
             
         Returns:
-            Modified action dictionary with pre-departure agents set to DO_NOTHING
+            Modified action dictionary
         """
-        # RailAgentStatus values:
-        # 0 = READY_TO_DEPART
-        # 1 = ACTIVE  
-        # 2 = DONE
-        # 3 = DONE_REMOVED
-        
+        # RailAgentStatus.READY_TO_DEPART = 0
         READY_TO_DEPART = 0
-        DO_NOTHING = 0
         
-        modified_actions = dict(action_dict)
+        modified_actions = action_dict.copy()
         
-        for agent_id, action in action_dict.items():
-            # Only modify agents that are waiting to depart
-            if agent_states.get(agent_id) == READY_TO_DEPART:
-                if not self.can_depart(agent_id, current_step):
-                    modified_actions[agent_id] = DO_NOTHING
-                    
+        for agent_handle, action in action_dict.items():
+            # Only modify agents that are ready to depart but shouldn't yet
+            if agent_handle in agent_states:
+                if agent_states[agent_handle] == READY_TO_DEPART:
+                    if not self.can_depart(agent_handle, current_step):
+                        # Force DO_NOTHING to prevent departure
+                        modified_actions[agent_handle] = 0
+                    else:
+                        # Agent can depart - mark as departed
+                        self.has_departed[agent_handle] = True
+        
         return modified_actions
+    
+    def get_departure_info(self) -> Dict:
+        """Get information about departure schedule."""
+        return {
+            'n_agents': self.n_agents,
+            'spacing': self.departure_spacing,
+            'mode': self.spacing_mode,
+            'departure_times': self.departure_times.copy(),
+            'has_departed': self.has_departed.copy()
+        }
 
 
 def compute_recommended_spacing(
     n_agents: int,
-    map_width: int,
-    map_height: int,
-    base_spacing: int = 8
+    map_width: int = 40,
+    map_height: int = 27,
+    n_cities: int = 4
 ) -> int:
     """
     Compute recommended departure spacing based on environment parameters.
     
-    The formula considers:
-    - More agents need more spacing
-    - Larger maps can tolerate tighter spacing
-    - Base spacing as minimum
+    This function estimates how much time agents need to clear initial
+    track segments based on map size and agent density.
     
     Args:
         n_agents: Number of agents
-        map_width: Map width in cells
-        map_height: Map height in cells
-        base_spacing: Minimum spacing between departures
+        map_width: Width of the map
+        map_height: Height of the map
+        n_cities: Number of cities (spawn/destination points)
         
     Returns:
-        Recommended departure spacing in time steps
+        Recommended spacing in steps
     """
-    map_area = map_width * map_height
-    density = n_agents / map_area
+    if n_agents <= 1:
+        return 0
     
-    # Higher density = more spacing needed
-    # Typical values: 5 agents on 40x27 = 0.0046 density
-    density_factor = 1 + (density * 1000)  # Scale up for reasonable values
+    # Estimate average distance between cities
+    map_diagonal = map_width + map_height
+    avg_city_distance = map_diagonal / max(2, n_cities)
     
-    # More agents = more spacing
-    agent_factor = 1 + (n_agents - 1) * 0.2
+    # Base spacing: give agents time to travel ~1/4 of city distance
+    base_spacing = int(avg_city_distance / 4)
     
-    recommended = int(base_spacing * density_factor * agent_factor)
+    # Adjust for agent density
+    cells_per_agent = (map_width * map_height) / n_agents
+    density_factor = max(0.5, min(2.0, 200 / cells_per_agent))
+    
+    # Final spacing
+    spacing = int(base_spacing * density_factor)
     
     # Clamp to reasonable range
-    return max(base_spacing, min(recommended, 30))
+    return max(8, min(40, spacing))
 
 
-# Recommended spacing values based on your experiments
-RECOMMENDED_SPACINGS = {
-    1: 0,    # Single agent - no spacing needed
-    2: 8,    # Two agents - minimal spacing
-    3: 10,   # Three agents - moderate spacing
-    5: 15,   # Five agents - significant spacing
-    7: 18,   # Seven agents
-    10: 22,  # Ten agents - large spacing
-}
-
-
-def get_spacing_for_phase(n_agents: int) -> int:
-    """Get recommended spacing for a given number of agents."""
-    if n_agents in RECOMMENDED_SPACINGS:
-        return RECOMMENDED_SPACINGS[n_agents]
+# ============================================================
+# Test function
+# ============================================================
+def test_staggered_departures():
+    """Test the staggered departure controller."""
+    print("Testing Staggered Departures")
+    print("=" * 50)
     
-    # Interpolate for unlisted values
-    sorted_keys = sorted(RECOMMENDED_SPACINGS.keys())
-    for i, k in enumerate(sorted_keys[:-1]):
-        if k < n_agents < sorted_keys[i + 1]:
-            # Linear interpolation
-            ratio = (n_agents - k) / (sorted_keys[i + 1] - k)
-            return int(
-                RECOMMENDED_SPACINGS[k] + 
-                ratio * (RECOMMENDED_SPACINGS[sorted_keys[i + 1]] - RECOMMENDED_SPACINGS[k])
-            )
+    # Test with 5 agents
+    controller = StaggeredDepartureController(
+        n_agents=5,
+        departure_spacing=25,  # Increased spacing
+        spacing_mode='fixed'
+    )
     
-    # For very large agent counts
-    return min(30, 10 + n_agents * 2)
+    print(f"Departure times: {controller.departure_times}")
+    print()
+    
+    # Simulate first 100 steps
+    for step in [0, 10, 25, 50, 75, 100]:
+        can_depart = {i: controller.can_depart(i, step) for i in range(5)}
+        departing = sum(can_depart.values())
+        print(f"Step {step:3d}: {departing}/5 agents can depart - {can_depart}")
+    
+    print()
+    print("Recommended spacings for different agent counts:")
+    for n in [1, 2, 3, 5, 7, 10]:
+        spacing = get_spacing_for_phase(n)
+        last_departure = (n - 1) * spacing
+        print(f"  {n} agents: spacing={spacing}, last departure at t={last_departure}")
 
 
 if __name__ == "__main__":
-    # Demo usage
-    print("Staggered Departures Configuration Demo")
-    print("=" * 50)
-    
-    for n_agents in [1, 2, 3, 5, 7, 10]:
-        spacing = get_spacing_for_phase(n_agents)
-        computed = compute_recommended_spacing(n_agents, 40, 27)
-        
-        print(f"\n{n_agents} agents:")
-        print(f"  Recommended spacing: {spacing} steps")
-        print(f"  Computed spacing: {computed} steps")
-        
-        controller = StaggeredDepartureController(n_agents, spacing)
-        print(f"  Departure times: {controller.departure_times}")
-        
-        # Show when each agent can depart
-        print(f"  Agent 0 departs at: t={controller.departure_times[0]}")
-        if n_agents > 1:
-            print(f"  Agent {n_agents-1} departs at: t={controller.departure_times[n_agents-1]}")
+    test_staggered_departures()

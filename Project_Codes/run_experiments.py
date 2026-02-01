@@ -52,8 +52,8 @@ PHASE_PARAMS = {
     "phase3_five_agents": {
         "learning_rate": 3e-5,
         "batch_size": 256,
-        "exp_start": 0.5,
-        "exp_decay": 0.999,
+        "exp_start": 1.0,
+        "exp_decay": 0.9993,
         "exp_end": 0.05,
         "target_update": 2000,
         "tau": 0.0005,
@@ -66,7 +66,7 @@ PHASE_PARAMS = {
     "phase4_seven_agents": {
         "learning_rate": 2e-5,
         "batch_size": 512,
-        "exp_start": 0.4,
+        "exp_start": 1.0,
         "exp_decay": 0.9995,
         "exp_end": 0.05,
         "target_update": 2500,
@@ -80,7 +80,7 @@ PHASE_PARAMS = {
     "phase5_seven_malfunction": {
         "learning_rate": 1e-5,
         "batch_size": 512,
-        "exp_start": 0.3,
+        "exp_start": 1.0,
         "exp_decay": 0.9995,
         "exp_end": 0.05,
         "target_update": 3000,
@@ -94,7 +94,7 @@ PHASE_PARAMS = {
     "phase6_ten_agents": {
         "learning_rate": 1e-5,
         "batch_size": 512,
-        "exp_start": 0.3,
+        "exp_start": 1.0,
         "exp_decay": 0.9997,
         "exp_end": 0.03,
         "target_update": 3000,
@@ -133,7 +133,7 @@ CURRICULUM = [
     ("phase2_three_agents", 2500, True),
     
     # Phase 3: Five agents - scale up
-    ("phase3_five_agents", 3500, True),
+    ("phase3_five_agents", 6000, True),
     
     # Uncomment below phases as needed:
     # ("phase4_seven_agents", 5000, True),
@@ -142,7 +142,7 @@ CURRICULUM = [
     # ("phase7_ten_malfunction", 10000, True),
 ]
 
-AGENTS = ["DQNAgent","DoubleDQNAgent", "DuelingDQNAgent", "DDDQNAgent"] #, "PPOAgent"  
+AGENTS = ["DDDQNAgent","DoubleDQNAgent", "DuelingDQNAgent","DQNAgent"] #, "PPOAgent"  
 
 
 def clear_checkpoints():
